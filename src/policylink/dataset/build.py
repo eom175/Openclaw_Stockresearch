@@ -14,6 +14,7 @@ from policylink.paths import (
     PORTFOLIO_RECOMMENDATION_JSON_PATH,
     PRICE_FEATURES_PATH,
     REPORTS_DIR,
+    YAHOO_GLOBAL_FEATURES_PATH,
 )
 from policylink.universe import KNOWN_STOCK_SECTOR, universe_for_dataset
 from policylink.utils import load_json, load_jsonl, normalize_code, parse_number, save_csv as write_csv, save_jsonl
@@ -123,6 +124,17 @@ CSV_COLUMNS = [
     "naver_sentiment_score",
     "naver_news_label",
 
+    "yahoo_sector_global_signal_score",
+    "yahoo_sector_global_risk_score",
+    "yahoo_sector_proxy_count",
+    "yahoo_related_proxy_labels",
+    "yahoo_semiconductor_proxy_score",
+    "yahoo_rate_proxy_score",
+    "yahoo_dollar_proxy_score",
+    "yahoo_energy_proxy_score",
+    "yahoo_volatility_proxy_score",
+    "yahoo_korea_proxy_score",
+
     "risk_level",
     "risk_score",
     "opportunity_score",
@@ -151,6 +163,33 @@ DART_FLAG_COLUMNS = {
     "embezzlement_breach": "dart_embezzlement_breach",
     "audit_opinion_risk": "dart_audit_opinion_risk",
     "correction_delay": "dart_correction_delay",
+}
+
+YAHOO_PROXY_GROUPS = {
+    "semiconductor_proxy": {
+        "column": "yahoo_semiconductor_proxy_score",
+        "tickers": ["SOXX", "SMH"],
+    },
+    "rate_proxy": {
+        "column": "yahoo_rate_proxy_score",
+        "tickers": ["TLT", "IEF"],
+    },
+    "dollar_proxy": {
+        "column": "yahoo_dollar_proxy_score",
+        "tickers": ["UUP", "KRW=X"],
+    },
+    "energy_proxy": {
+        "column": "yahoo_energy_proxy_score",
+        "tickers": ["USO", "XLE"],
+    },
+    "volatility_proxy": {
+        "column": "yahoo_volatility_proxy_score",
+        "tickers": ["^VIX"],
+    },
+    "korea_proxy": {
+        "column": "yahoo_korea_proxy_score",
+        "tickers": ["EWY"],
+    },
 }
 
 
@@ -385,12 +424,91 @@ def build_news_columns(feature: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def normalize_yahoo_features(yahoo_raw: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(yahoo_raw, dict):
+        yahoo_raw = {}
+
+    features = yahoo_raw.get("features", {})
+    sector_scores = yahoo_raw.get("sector_global_scores", {})
+    proxy_group_scores = yahoo_raw.get("proxy_group_scores", {})
+
+    if not isinstance(features, dict):
+        features = {}
+    if not isinstance(sector_scores, dict):
+        sector_scores = {}
+    if not isinstance(proxy_group_scores, dict):
+        proxy_group_scores = {}
+
+    return {
+        "features": {
+            str(ticker): item
+            for ticker, item in features.items()
+            if isinstance(item, dict)
+        },
+        "sector_global_scores": {
+            str(sector): item
+            for sector, item in sector_scores.items()
+            if isinstance(item, dict)
+        },
+        "proxy_group_scores": {
+            str(group): item
+            for group, item in proxy_group_scores.items()
+            if isinstance(item, dict)
+        },
+    }
+
+
+def average_proxy_score(features: Dict[str, Dict[str, Any]], tickers: List[str], default: float = 50.0) -> float:
+    values = [
+        parse_number(features[ticker].get("global_signal_score"), default)
+        for ticker in tickers
+        if ticker in features
+    ]
+    if not values:
+        return default
+    return round(sum(values) / len(values), 4)
+
+
+def yahoo_group_score(yahoo_context: Dict[str, Any], group_key: str, tickers: List[str]) -> float:
+    group_scores = yahoo_context.get("proxy_group_scores", {})
+    group = group_scores.get(group_key, {})
+    if isinstance(group, dict) and group.get("proxy_count"):
+        return round(parse_number(group.get("global_signal_score"), 50.0), 4)
+    return average_proxy_score(yahoo_context.get("features", {}), tickers)
+
+
+def build_yahoo_columns(sector: str, yahoo_context: Dict[str, Any]) -> Dict[str, Any]:
+    sector_scores = yahoo_context.get("sector_global_scores", {})
+    sector_score = sector_scores.get(sector, {}) if isinstance(sector_scores, dict) else {}
+    if not isinstance(sector_score, dict):
+        sector_score = {}
+
+    labels = sector_score.get("related_proxy_labels")
+    if isinstance(labels, list):
+        related_proxy_labels = "|".join(str(label) for label in labels)
+    else:
+        related_proxy_labels = None
+
+    result = {
+        "yahoo_sector_global_signal_score": round(parse_number(sector_score.get("global_signal_score"), 50.0), 4),
+        "yahoo_sector_global_risk_score": round(parse_number(sector_score.get("risk_score"), 0.0), 4),
+        "yahoo_sector_proxy_count": int(parse_number(sector_score.get("proxy_count"), 0)),
+        "yahoo_related_proxy_labels": related_proxy_labels,
+    }
+
+    for group_key, meta in YAHOO_PROXY_GROUPS.items():
+        result[meta["column"]] = yahoo_group_score(yahoo_context, group_key, meta["tickers"])
+
+    return result
+
+
 def create_dataset_rows() -> List[Dict[str, Any]]:
     candidates = load_json(CANDIDATES_PATH, {"items": []})
     price_raw = load_json(PRICE_FEATURES_PATH, {"features": {}})
     flow_raw = load_json(FLOW_FEATURES_PATH, {"features": {}})
     dart_raw = load_json(DART_EVENT_FEATURES_PATH, {"features": {}})
     news_raw = load_json(NEWS_EVENT_FEATURES_PATH, {"features": {}})
+    yahoo_raw = load_json(YAHOO_GLOBAL_FEATURES_PATH, {"features": {}, "sector_global_scores": {}, "proxy_group_scores": {}})
     account_summary = load_json(ACCOUNT_SUMMARY_PATH, {})
     recommendation = load_json(PORTFOLIO_RECOMMENDATION_PATH, {})
 
@@ -414,6 +532,7 @@ def create_dataset_rows() -> List[Dict[str, Any]]:
     }
     normalized_dart_features = normalize_dart_features(dart_raw)
     normalized_news_features = normalize_news_features(news_raw)
+    yahoo_context = normalize_yahoo_features(yahoo_raw)
 
     snapshot_date = get_snapshot_date(price_raw)
     generated_at = datetime.now(timezone.utc).isoformat()
@@ -466,6 +585,7 @@ def create_dataset_rows() -> List[Dict[str, Any]]:
         flow = normalized_flow_features.get(code, {})
         dart_columns = build_dart_columns(normalized_dart_features.get(code))
         news_columns = build_news_columns(normalized_news_features.get(code))
+        yahoo_columns = build_yahoo_columns(sector, yahoo_context)
         holding = holding_map.get(code, {})
 
         sector_rec = sector_map.get(sector, {})
@@ -536,6 +656,7 @@ def create_dataset_rows() -> List[Dict[str, Any]]:
 
             **dart_columns,
             **news_columns,
+            **yahoo_columns,
 
             "risk_level": research.get("risk_level"),
             "risk_score": research.get("risk_score"),

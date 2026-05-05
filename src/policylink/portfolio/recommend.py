@@ -15,6 +15,7 @@ from policylink.paths import (
     PORTFOLIO_RECOMMENDATION_MD_PATH,
     PRICE_FEATURES_PATH,
     REPORTS_DIR,
+    YAHOO_GLOBAL_FEATURES_PATH,
 )
 from policylink.universe import KNOWN_STOCK_SECTOR
 from policylink.utils import load_json, load_text, normalize_code, parse_number
@@ -155,6 +156,15 @@ POSITIVE_OPPORTUNITY_POLICY_TYPES = {
     "auto_ev",
     "shipbuilding_defense",
     "trade_policy",
+}
+
+GLOBAL_PROXY_GROUP_LABELS = {
+    "semiconductor_proxy": "반도체 proxy",
+    "rate_proxy": "금리 proxy",
+    "dollar_proxy": "달러/환율 proxy",
+    "energy_proxy": "에너지 proxy",
+    "volatility_proxy": "변동성 proxy",
+    "korea_proxy": "한국시장 proxy",
 }
 
 def fmt_krw(value) -> str:
@@ -298,6 +308,43 @@ def load_news_features() -> Dict[str, Any]:
         "generated_at": raw.get("generated_at"),
         "features": normalized,
         "sector_scores": sector_scores,
+    }
+
+
+def load_yahoo_global_features() -> Dict[str, Any]:
+    raw = load_json(YAHOO_GLOBAL_FEATURES_PATH, {"features": {}, "sector_global_scores": {}, "proxy_group_scores": {}})
+    features = raw.get("features", {})
+    sector_scores = raw.get("sector_global_scores", {})
+    proxy_group_scores = raw.get("proxy_group_scores", {})
+    risk_warnings = raw.get("risk_warnings", [])
+
+    if not isinstance(features, dict):
+        features = {}
+    if not isinstance(sector_scores, dict):
+        sector_scores = {}
+    if not isinstance(proxy_group_scores, dict):
+        proxy_group_scores = {}
+    if not isinstance(risk_warnings, list):
+        risk_warnings = []
+
+    return {
+        "generated_at": raw.get("generated_at"),
+        "features": {
+            str(ticker): item
+            for ticker, item in features.items()
+            if isinstance(item, dict)
+        },
+        "sector_global_scores": {
+            str(sector): item
+            for sector, item in sector_scores.items()
+            if isinstance(item, dict)
+        },
+        "proxy_group_scores": {
+            str(group): item
+            for group, item in proxy_group_scores.items()
+            if isinstance(item, dict)
+        },
+        "risk_warnings": [str(item) for item in risk_warnings],
     }
 
 
@@ -852,9 +899,14 @@ def combine_sector_scores(
     sector_flow_scores: Dict[str, Any],
     sector_news_scores: Optional[Dict[str, Any]] = None,
     has_news_features: bool = False,
+    yahoo_global_features: Optional[Dict[str, Any]] = None,
+    has_yahoo_features: bool = False,
 ) -> List[Dict[str, Any]]:
     combined = []
     sector_news_scores = sector_news_scores or {}
+    yahoo_global_features = yahoo_global_features or {}
+    yahoo_sector_scores = yahoo_global_features.get("sector_global_scores", {})
+    yahoo_features_by_ticker = yahoo_global_features.get("features", {})
 
     if has_news_features:
         weights = {"research": 0.40, "price": 0.28, "flow": 0.22, "news": 0.10}
@@ -881,6 +933,20 @@ def combine_sector_scores(
         news_risk_penalty = parse_number(news_info.get("risk_penalty"), 0.0)
         news_opportunity_bonus = parse_number(news_info.get("opportunity_bonus"), 0.0)
 
+        yahoo_info = yahoo_sector_scores.get(sector, {}) if isinstance(yahoo_sector_scores, dict) else {}
+        if not isinstance(yahoo_info, dict):
+            yahoo_info = {}
+        yahoo_score = parse_number(yahoo_info.get("global_signal_score"), 50.0)
+        yahoo_risk_score = parse_number(yahoo_info.get("risk_score"), 0.0)
+        yahoo_proxy_count = int(parse_number(yahoo_info.get("proxy_count"), 0))
+        yahoo_related_proxies = safe_list(yahoo_info.get("related_proxies"))
+        yahoo_related_proxy_labels = safe_list(yahoo_info.get("related_proxy_labels"))
+        yahoo_proxy_items = [
+            yahoo_features_by_ticker.get(ticker)
+            for ticker in yahoo_related_proxies
+            if isinstance(yahoo_features_by_ticker, dict) and isinstance(yahoo_features_by_ticker.get(ticker), dict)
+        ]
+
         final_score = (
             research_score * weights["research"]
             + price_score * weights["price"]
@@ -893,6 +959,13 @@ def combine_sector_scores(
             - flow_risk_penalty * 0.18
             - news_risk_penalty * 0.10
         )
+
+        if has_yahoo_features:
+            final_score = final_score * 0.90 + yahoo_score * 0.10
+            if yahoo_risk_score >= 75:
+                final_score -= 5.0
+            elif yahoo_risk_score >= 60:
+                final_score -= 2.0
 
         final_score = clamp(final_score, 0.0, 100.0)
 
@@ -917,8 +990,16 @@ def combine_sector_scores(
             "price_opportunity_bonus": round(price_opportunity_bonus, 2),
             "flow_opportunity_bonus": round(flow_opportunity_bonus, 2),
             "news_opportunity_bonus": round(news_opportunity_bonus, 2) if has_news_features else 0.0,
+            "yahoo_global_score": round(yahoo_score, 2) if has_yahoo_features else None,
+            "yahoo_global_risk_score": round(yahoo_risk_score, 2) if has_yahoo_features else None,
+            "yahoo_proxy_count": yahoo_proxy_count if has_yahoo_features else 0,
+            "yahoo_related_proxies": yahoo_related_proxies if has_yahoo_features else [],
+            "yahoo_related_proxy_labels": yahoo_related_proxy_labels if has_yahoo_features else [],
+            "yahoo_proxy_items": yahoo_proxy_items if has_yahoo_features else [],
+            "yahoo_risk_off": bool(has_yahoo_features and yahoo_score < 45),
             "final_score": round(final_score, 2),
             "scoring_weights": weights,
+            "global_modifier_weight": 0.10 if has_yahoo_features else 0.0,
             "price_items": price_info.get("items", []),
             "flow_items": flow_info.get("items", []),
             "news_items": news_info.get("items", []),
@@ -1127,6 +1208,14 @@ def make_new_position_plan(
             elif news_score >= 65:
                 timing_hint += " / 뉴스 흐름 우호"
 
+        if item.get("yahoo_global_score") is not None:
+            yahoo_score = parse_number(item.get("yahoo_global_score"), 50.0)
+            yahoo_risk_score = parse_number(item.get("yahoo_global_risk_score"), 0.0)
+            if yahoo_score < 45 or yahoo_risk_score >= 70:
+                timing_hint += " / 글로벌 proxy risk-off 확인"
+            elif yahoo_score >= 70:
+                timing_hint += " / 글로벌 proxy 우호"
+
         watchlist.append({
             "sector": sector,
             "label": item["label"],
@@ -1136,6 +1225,12 @@ def make_new_position_plan(
             "news_score": item.get("news_score"),
             "news_label": item.get("news_label"),
             "news_attention_score": item.get("news_attention_score"),
+            "yahoo_global_score": item.get("yahoo_global_score"),
+            "yahoo_global_risk_score": item.get("yahoo_global_risk_score"),
+            "yahoo_related_proxies": item.get("yahoo_related_proxies", []),
+            "yahoo_related_proxy_labels": item.get("yahoo_related_proxy_labels", []),
+            "yahoo_proxy_items": item.get("yahoo_proxy_items", []),
+            "yahoo_risk_off": item.get("yahoo_risk_off", False),
             "final_score": item["final_score"],
             "target_weight": target_weight,
             "candidate_assets": item["candidate_assets"],
@@ -1163,6 +1258,7 @@ def build_recommendation():
     price_features = load_price_features()
     flow_features = load_flow_features()
     news_features = load_news_features()
+    yahoo_global_features = load_yahoo_global_features()
 
     research = analyze_research(candidates, daily_features)
     account = analyze_account(account_summary)
@@ -1171,6 +1267,7 @@ def build_recommendation():
     sector_flow_scores = build_sector_flow_scores(flow_features)
     sector_news_scores = build_sector_news_scores(news_features)
     has_news_features = bool(news_features.get("features"))
+    has_yahoo_features = bool(yahoo_global_features.get("features"))
 
     combined_sectors = combine_sector_scores(
         research=research,
@@ -1178,6 +1275,8 @@ def build_recommendation():
         sector_flow_scores=sector_flow_scores,
         sector_news_scores=sector_news_scores,
         has_news_features=has_news_features,
+        yahoo_global_features=yahoo_global_features,
+        has_yahoo_features=has_yahoo_features,
     )
 
     target_allocation = build_target_allocation(
@@ -1221,6 +1320,12 @@ def build_recommendation():
     if not news_features.get("features"):
         warnings.append("news_event_features.json이 없어 뉴스 기반 추천 보정은 적용하지 않았습니다.")
 
+    if not yahoo_global_features.get("features"):
+        warnings.append("yahoo_global_features.json이 없어 글로벌 proxy 보정은 적용하지 않았습니다.")
+
+    for warning in yahoo_global_features.get("risk_warnings", [])[:5]:
+        warnings.append(f"글로벌 proxy 경고: {warning}")
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "mock_recommendation_only",
@@ -1241,15 +1346,24 @@ def build_recommendation():
             "count": len(news_features.get("features", {})),
             "enabled": has_news_features,
         },
+        "yahoo_global_features_meta": {
+            "generated_at": yahoo_global_features.get("generated_at"),
+            "count": len(yahoo_global_features.get("features", {})),
+            "enabled": has_yahoo_features,
+        },
         "sector_price_scores": sector_price_scores,
         "sector_flow_scores": sector_flow_scores,
         "sector_news_scores": sector_news_scores,
+        "sector_global_scores": yahoo_global_features.get("sector_global_scores", {}),
+        "global_proxy_features": yahoo_global_features.get("features", {}),
+        "global_proxy_group_scores": yahoo_global_features.get("proxy_group_scores", {}),
+        "global_proxy_risk_warnings": yahoo_global_features.get("risk_warnings", []),
         "combined_sectors": combined_sectors,
         "target_allocation": target_allocation,
         "holding_recommendations": holding_recommendations,
         "new_position_plan": new_position_plan,
         "warnings": warnings,
-        "next_step": "build_dataset.py로 리서치·가격·수급·뉴스 피처를 날짜/종목 단위 학습 데이터셋으로 결합합니다.",
+        "next_step": "build_dataset.py로 리서치·가격·수급·뉴스·글로벌 proxy 피처를 날짜/종목 단위 학습 데이터셋으로 결합합니다.",
     }
 
 
@@ -1304,6 +1418,78 @@ def build_news_feature_line(feature: Optional[Dict[str, Any]]) -> str:
     )
 
 
+def build_global_proxy_feature_line(feature: Optional[Dict[str, Any]]) -> str:
+    if not feature:
+        return "글로벌 proxy 데이터 없음"
+
+    latest_news = feature.get("latest_news_title") or "최신 뉴스 없음"
+    return (
+        f"global {feature.get('global_signal_score')}"
+        f" / label {feature.get('global_signal_label')}"
+        f" / risk {feature.get('proxy_risk_score')}"
+        f" / 5D {fmt_ratio(feature.get('return_5d'))}"
+        f" / 20D {fmt_ratio(feature.get('return_20d'))}"
+        f" / trend {feature.get('trend_label')}"
+        f" / news sentiment {feature.get('news_sentiment_score')}"
+        f" / 최신 뉴스 제목: {latest_news}"
+    )
+
+
+def build_global_proxy_section(result: Dict[str, Any]) -> List[str]:
+    lines = ["## 글로벌 Proxy 점검"]
+
+    if not result.get("yahoo_global_features_meta", {}).get("enabled"):
+        lines.append("- Yahoo 글로벌 proxy 데이터 없음 / 기존 국내 리서치·가격·수급·뉴스 조건 우선")
+        lines.append("")
+        return lines
+
+    group_scores = result.get("global_proxy_group_scores", {})
+    feature_by_ticker = result.get("global_proxy_features", {})
+
+    ordered_groups = [
+        ("semiconductor_proxy", "반도체 proxy: SOXX/SMH"),
+        ("rate_proxy", "금리 proxy: TLT/IEF"),
+        ("dollar_proxy", "달러/환율 proxy: UUP/KRW=X"),
+        ("energy_proxy", "에너지 proxy: USO/XLE"),
+        ("volatility_proxy", "변동성 proxy: ^VIX"),
+        ("korea_proxy", "한국시장 proxy: EWY"),
+    ]
+
+    for group_key, label in ordered_groups:
+        group = group_scores.get(group_key, {})
+        tickers = safe_list(group.get("tickers"))
+        if not tickers:
+            tickers = [str(x) for x in str(label.split(":")[-1]).strip().split("/") if x]
+
+        lines.append(
+            f"- {label}: "
+            f"score={group.get('global_signal_score', 'N/A')} "
+            f"/ risk={group.get('risk_score', 'N/A')} "
+            f"/ proxy_count={group.get('proxy_count', 0)}"
+        )
+        proxy_lines = []
+        for ticker in tickers:
+            feature = feature_by_ticker.get(ticker)
+            if not feature:
+                continue
+            proxy_lines.append(
+                f"{ticker} {feature.get('global_signal_score')}({feature.get('global_signal_label')})"
+                f", 5D {fmt_ratio(feature.get('return_5d'))}"
+                f", news {feature.get('news_sentiment_score')}"
+            )
+        if proxy_lines:
+            lines.append(f"  - 구성 proxy: {' / '.join(proxy_lines)}")
+
+    risk_warnings = safe_list(result.get("global_proxy_risk_warnings"))
+    if risk_warnings:
+        lines.append("- risk warning:")
+        for warning in risk_warnings[:5]:
+            lines.append(f"  - {warning}")
+
+    lines.append("")
+    return lines
+
+
 def build_markdown(result: Dict[str, Any]) -> str:
     account = result["account"]
     research = result["research"]
@@ -1323,6 +1509,10 @@ def build_markdown(result: Dict[str, Any]) -> str:
     else:
         lines.append("- 뉴스 데이터: 없음 / 기존 리서치·가격·수급 비중 유지")
         lines.append("- 뉴스 점수: N/A / 뉴스 라벨: N/A / 최신 뉴스 제목: N/A")
+    if result.get("yahoo_global_features_meta", {}).get("enabled"):
+        lines.append(f"- Yahoo 글로벌 데이터 생성 시각: {result['yahoo_global_features_meta'].get('generated_at')}")
+    else:
+        lines.append("- Yahoo 글로벌 데이터: 없음 / 글로벌 proxy 보정 미적용")
     lines.append("")
 
     lines.append("## 1. 오늘의 판단 요약")
@@ -1342,6 +1532,8 @@ def build_markdown(result: Dict[str, Any]) -> str:
         lines.append(f"- {allocation_label(key)}: {value * 100:.1f}%")
     lines.append("")
 
+    lines.extend(build_global_proxy_section(result))
+
     lines.append("## 3. 관심 섹터 / 후보 자산")
     if new_plan["watchlist"]:
         for i, item in enumerate(new_plan["watchlist"], 1):
@@ -1354,6 +1546,25 @@ def build_markdown(result: Dict[str, Any]) -> str:
                 lines.append(f"- 뉴스 점수: {item.get('news_score')}")
                 lines.append(f"- 뉴스 라벨: {item.get('news_label')}")
                 lines.append(f"- 뉴스 관심도: {item.get('news_attention_score')}")
+            if item.get("yahoo_global_score") is not None:
+                proxy_labels = ", ".join([str(x) for x in item.get("yahoo_related_proxy_labels", [])]) or "관련 proxy 없음"
+                proxy_tickers = ", ".join([str(x) for x in item.get("yahoo_related_proxies", [])]) or "N/A"
+                lines.append(f"- Yahoo 글로벌 점수: {item.get('yahoo_global_score')}")
+                lines.append(f"- Yahoo 글로벌 리스크: {item.get('yahoo_global_risk_score')}")
+                lines.append(f"- 관련 proxy: {proxy_tickers} / {proxy_labels}")
+                if item.get("yahoo_proxy_items"):
+                    proxy_trends = []
+                    proxy_news = []
+                    for proxy_item in item.get("yahoo_proxy_items", [])[:4]:
+                        proxy_trends.append(
+                            f"{proxy_item.get('ticker')} {proxy_item.get('trend_label')} 5D {fmt_ratio(proxy_item.get('return_5d'))}"
+                        )
+                        proxy_news.append(
+                            f"{proxy_item.get('ticker')} news {proxy_item.get('news_sentiment_score')}"
+                        )
+                    lines.append(f"- proxy 가격 추세: {' / '.join(proxy_trends)}")
+                    lines.append(f"- proxy 뉴스 sentiment: {' / '.join(proxy_news)}")
+                lines.append(f"- risk_off 여부: {'yes' if item.get('yahoo_risk_off') else 'no'}")
             lines.append(f"- 목표 비중 후보: {item['target_weight'] * 100:.1f}%")
             lines.append(f"- 타이밍 힌트: {item['timing_hint']}")
             lines.append(f"- 이유: {item['reason']}")
@@ -1451,9 +1662,12 @@ def build_markdown(result: Dict[str, Any]) -> str:
         lines.append("- 최종 섹터 점수는 리서치 40%, 가격 28%, 수급 22%, 뉴스 10% 비중으로 계산합니다.")
     else:
         lines.append("- 최종 섹터 점수는 리서치 45%, 가격 30%, 수급 25% 비중으로 계산합니다.")
+    if result.get("yahoo_global_features_meta", {}).get("enabled"):
+        lines.append("- Yahoo 글로벌 proxy 점수는 기존 섹터 점수에 10% 보조 modifier로 반영합니다.")
     lines.append("- 가격점수는 5일/20일 수익률, 20일 변동성, 이동평균 괴리율, 낙폭, 거래량 비율을 반영합니다.")
     lines.append("- 수급점수는 외국인/기관 5일·20일 순매수와 동반 순매수/순매도 여부를 반영합니다.")
     lines.append("- 뉴스점수는 네이버 뉴스 검색 API의 제목/요약 키워드 기반 sentiment와 attention을 반영합니다.")
+    lines.append("- 글로벌 proxy는 QQQ/SOXX/SMH/TLT/IEF/UUP/GLD/USO/XLE/XLF/KBE/EWY/^VIX/KRW=X의 가격 추세와 compact Yahoo 뉴스 sentiment를 반영합니다.")
     lines.append("- 아직 재무, 실적, 밸류에이션, 체결강도, 백테스트 검증은 포함하지 않았습니다.")
     lines.append("")
 
@@ -1464,7 +1678,7 @@ def build_markdown(result: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("## 8. 다음 단계")
     lines.append("- 이 리포트는 주문을 만들지 않습니다.")
-    lines.append("- 다음 개발 단계는 `build_dataset.py`로 리서치·가격·수급·뉴스 피처를 날짜/종목 단위 학습 데이터셋으로 결합하는 것입니다.")
+    lines.append("- 다음 개발 단계는 `build_dataset.py`로 리서치·가격·수급·뉴스·글로벌 proxy 피처를 날짜/종목 단위 학습 데이터셋으로 결합하는 것입니다.")
     lines.append("- 이후 `train_model.py`에서 XGBoost 또는 룰 기반+모델 혼합 방식으로 신호를 검증합니다.")
 
     return "\n".join(lines)

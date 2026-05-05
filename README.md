@@ -12,6 +12,8 @@ OpenClaw + Telegram + Kiwoom 모의투자 환경에서 국내주식/국내상장
 
 `.env`에는 Kiwoom/OpenDART/Naver 접속 정보가 들어가므로 열람하거나 출력하지 않는다.
 
+Yahoo Finance 데이터는 `yfinance`를 이용해 내부 연구/교육 목적 compact feature로만 사용한다.
+
 ## 전체 파이프라인
 
 ```bash
@@ -24,14 +26,15 @@ cd /Users/eomjiyong/policy-research
 1. `collect_research.py --hours 720 --max-items 50`
 2. `collect_dart.py --days 90 --max-stocks 10 --sleep 0.3`
 3. `collect_naver_news.py --days 14 --max-stocks 10 --display 20 --sort date --sleep 0.3`
-4. `kiwoom_daily_report.py`
-5. `sync_prices.py --max-stocks 10 --sleep 0.7`
-6. `sync_flows.py --max-stocks 5 --sleep 1.2`
-7. `recommend_portfolio.py`
-8. `build_dataset.py`
-9. `label_dataset.py`
+4. `collect_yahoo_finance.py --days 90 --news-count 10 --max-tickers 14 --sleep 0.3`
+5. `kiwoom_daily_report.py`
+6. `sync_prices.py --max-stocks 10 --sleep 0.7`
+7. `sync_flows.py --max-stocks 5 --sleep 1.2`
+8. `recommend_portfolio.py`
+9. `build_dataset.py`
+10. `label_dataset.py`
 
-주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. DART/뉴스 수집 실패는 warning으로 기록하고 가격/수급/추천 파이프라인은 계속 진행한다.
+주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. DART/뉴스/Yahoo 수집 실패는 warning으로 기록하고 가격/수급/추천 파이프라인은 계속 진행한다.
 
 ## OpenClaw Cron 예시
 
@@ -50,6 +53,9 @@ Telegram 요약에는 `reports/portfolio_recommendation.md`, `reports/model_data
 - `data/dart_event_features.json`
 - `data/naver_news.json`
 - `data/news_event_features.json`
+- `data/yahoo_market_data.json`
+- `data/yahoo_news.json`
+- `data/yahoo_global_features.json`
 - `reports/kiwoom_mock_account_summary.json`
 - `data/price_features.json`
 - `data/flow_features.json`
@@ -57,6 +63,8 @@ Telegram 요약에는 `reports/portfolio_recommendation.md`, `reports/model_data
 - `reports/dart_disclosures.md`
 - `reports/naver_news_sync_diagnostic.json`
 - `reports/naver_news_features.md`
+- `reports/yahoo_finance_sync_diagnostic.json`
+- `reports/yahoo_global_features.md`
 - `reports/portfolio_recommendation.md`
 - `data/model_dataset.jsonl`
 - `data/model_dataset.csv`
@@ -116,6 +124,34 @@ VS Code에서는 `News - Collect Naver` launch 메뉴를 사용한다.
 - `reports/naver_news_features.md`
 
 뉴스 데이터는 기사 원문이 아니라 네이버 검색 API 응답의 제목, 요약, URL, 날짜와 compact keyword feature만 저장한다. 기사 본문 scraping은 하지 않는다.
+
+## Yahoo Finance 글로벌 Proxy 수집
+
+Yahoo Finance 글로벌 proxy 피처를 사용하려면 `yfinance`와 `pandas`가 필요하다.
+
+```bash
+cd /Users/eomjiyong/policy-research
+/Users/eomjiyong/policy-research/.venv/bin/pip install yfinance pandas
+```
+
+수동 실행:
+
+```bash
+cd /Users/eomjiyong/policy-research
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/collect_yahoo_finance.py --days 90 --news-count 10 --max-tickers 14 --sleep 0.3
+```
+
+VS Code에서는 `Yahoo - Collect Global Features` launch 메뉴를 사용한다.
+
+생성 파일:
+
+- `data/yahoo_market_data.json`
+- `data/yahoo_news.json`
+- `data/yahoo_global_features.json`
+- `reports/yahoo_finance_sync_diagnostic.json`
+- `reports/yahoo_global_features.md`
+
+Yahoo Finance/yfinance 데이터는 공식 제휴 API가 아니므로 내부 연구/교육 목적 compact feature로만 사용한다. 기사 원문 전체는 저장하지 않고 제목, 요약, URL, 발행시각, 관련 ticker와 proxy별 점수만 저장한다.
 
 ## 주의사항
 

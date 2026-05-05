@@ -121,6 +121,7 @@ def main() -> int:
         PipelineStep("Research - Collect 30 Days", [python, str(script_dir / "collect_research.py"), "--hours", "720", "--max-items", "50"]),
         PipelineStep("DART - Collect Disclosures", [python, str(script_dir / "collect_dart.py"), "--days", "90", "--max-stocks", "10", "--sleep", "0.3"], warning_only=True),
         PipelineStep("News - Collect Naver", [python, str(script_dir / "collect_naver_news.py"), "--days", "14", "--max-stocks", "10", "--display", "20", "--sort", "date", "--sleep", "0.3"], warning_only=True),
+        PipelineStep("Yahoo - Collect Global Features", [python, str(script_dir / "collect_yahoo_finance.py"), "--days", "90", "--news-count", "10", "--max-tickers", "14", "--sleep", "0.3"], warning_only=True),
         PipelineStep("Kiwoom - Daily Mock Account Report", [python, str(script_dir / "kiwoom_daily_report.py")]),
         PipelineStep("Prices - Sync Daily", [python, str(script_dir / "sync_prices.py"), "--max-stocks", "10", "--sleep", "0.7"]),
         PipelineStep("Flows - Sync Investor Flows", [python, str(script_dir / "sync_flows.py"), "--max-stocks", "5", "--sleep", "1.2"]),

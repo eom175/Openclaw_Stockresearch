@@ -15,6 +15,10 @@
 - 뉴스 원문 전체를 reports에 복사하지 않는다.
 - 뉴스 수집은 제목/요약/URL/날짜와 compact feature만 저장한다.
 - 기사 본문 scraping은 하지 않는다.
+- Yahoo Finance 뉴스 원문 전체를 reports에 복사하지 않는다.
+- yfinance 데이터는 내부 연구/교육 목적 compact feature로만 사용한다.
+- Yahoo raw news body를 장기 저장하지 않고 title/summary/url/time/ticker 중심으로 저장한다.
+- 데이터 사용 권리/약관은 사용자가 별도로 확인해야 하며, 이 코드는 데이터 재배포를 목적으로 하지 않는다.
 
 ## 주문 실행 금지
 

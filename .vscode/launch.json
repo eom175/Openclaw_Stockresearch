@@ -95,6 +95,21 @@
       ]
     },
     {
+      "name": "Yahoo - Collect Global Features",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/collect_yahoo_finance.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--days", "90",
+        "--news-count", "10",
+        "--max-tickers", "14",
+        "--sleep", "0.3"
+      ]
+    },
+    {
     "name": "Kiwoom - Account Number Test",
     "type": "debugpy",
     "request": "launch",
