@@ -7,6 +7,8 @@ REPORTS_DIR = PROJECT_ROOT / "reports"
 RAW_DIR = PROJECT_ROOT / "raw"
 MODELS_DIR = PROJECT_ROOT / "models"
 BACKFILL_DIR = DATA_DIR / "backfill"
+MODEL_EXPERIMENTS_DIR = MODELS_DIR / "experiments"
+ACTIVE_MODELS_DIR = MODELS_DIR / "active"
 
 CANDIDATES_PATH = DATA_DIR / "candidates.compact.json"
 PRICES_DAILY_PATH = DATA_DIR / "prices_daily.json"
@@ -70,6 +72,14 @@ BACKFILL_MARKET_HISTORY_REPORT_PATH = REPORTS_DIR / "backfill_market_history_rep
 HISTORICAL_DATASET_REPORT_PATH = REPORTS_DIR / "historical_dataset_report.md"
 HISTORICAL_DATASET_AUDIT_JSON_PATH = REPORTS_DIR / "historical_dataset_audit.json"
 HISTORICAL_DATASET_AUDIT_REPORT_PATH = REPORTS_DIR / "historical_dataset_audit_report.md"
+EXPERIMENT_RESULTS_PATH = REPORTS_DIR / "experiment_results.json"
+EXPERIMENT_REPORT_PATH = REPORTS_DIR / "experiment_report.md"
+CALIBRATION_REPORT_JSON_PATH = REPORTS_DIR / "calibration_report.json"
+CALIBRATION_REPORT_MD_PATH = REPORTS_DIR / "calibration_report.md"
+MODEL_EXPLAINABILITY_JSON_PATH = REPORTS_DIR / "model_explainability.json"
+MODEL_EXPLAINABILITY_MD_PATH = REPORTS_DIR / "model_explainability.md"
+MODEL_PROMOTION_REPORT_PATH = REPORTS_DIR / "model_promotion_report.md"
+MODEL_RESEARCH_PIPELINE_REPORT_PATH = REPORTS_DIR / "model_research_pipeline_report.md"
 
 XGB_OUTPERFORM_MODEL_PATH = MODELS_DIR / "xgb_outperform_5d.json"
 XGB_RETURN_MODEL_PATH = MODELS_DIR / "xgb_return_5d.json"
@@ -79,6 +89,12 @@ XGB_RETURN_METADATA_PATH = MODELS_DIR / "xgb_return_5d_metadata.json"
 XGB_DRAWDOWN_METADATA_PATH = MODELS_DIR / "xgb_drawdown_5d_metadata.json"
 FEATURE_COLUMNS_PATH = MODELS_DIR / "feature_columns.json"
 MODEL_REGISTRY_PATH = MODELS_DIR / "model_registry.json"
+ACTIVE_XGB_OUTPERFORM_MODEL_PATH = ACTIVE_MODELS_DIR / "xgb_outperform_5d.json"
+ACTIVE_XGB_RETURN_MODEL_PATH = ACTIVE_MODELS_DIR / "xgb_return_5d.json"
+ACTIVE_XGB_DRAWDOWN_MODEL_PATH = ACTIVE_MODELS_DIR / "xgb_drawdown_5d.json"
+ACTIVE_FEATURE_COLUMNS_PATH = ACTIVE_MODELS_DIR / "feature_columns.json"
+ACTIVE_CALIBRATED_OUTPERFORM_MODEL_PATH = ACTIVE_MODELS_DIR / "calibrated_outperform_5d.joblib"
+ACTIVE_CLASSIFIER_JOBLIB_PATH = ACTIVE_MODELS_DIR / "classifier.joblib"
 
 
 def ensure_project_dirs() -> None:
@@ -87,3 +103,5 @@ def ensure_project_dirs() -> None:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    MODEL_EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    ACTIVE_MODELS_DIR.mkdir(parents=True, exist_ok=True)

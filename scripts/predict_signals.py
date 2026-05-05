@@ -11,6 +11,12 @@ from _bootstrap import add_src_to_path
 add_src_to_path()
 
 from policylink.paths import (
+    ACTIVE_CALIBRATED_OUTPERFORM_MODEL_PATH,
+    ACTIVE_CLASSIFIER_JOBLIB_PATH,
+    ACTIVE_FEATURE_COLUMNS_PATH,
+    ACTIVE_XGB_DRAWDOWN_MODEL_PATH,
+    ACTIVE_XGB_OUTPERFORM_MODEL_PATH,
+    ACTIVE_XGB_RETURN_MODEL_PATH,
     FEATURE_COLUMNS_PATH,
     ML_SIGNALS_JSON_PATH,
     ML_SIGNALS_MD_PATH,
@@ -42,8 +48,12 @@ def no_model_payload(snapshot_date: Optional[str], reason: str, status: str = "n
         "generated_at": utc_now(),
         "mode": "ml_signal_generation",
         "model_status": status,
+        "model_source": "no_model",
+        "calibrated": False,
         "snapshot_date": snapshot_date,
         "best_threshold": None,
+        "threshold_used": None,
+        "experiment_id": None,
         "reason": reason,
         "signals": {},
         "order_enabled": False,
@@ -58,6 +68,8 @@ def build_report(payload: Dict[str, Any], top_n: int) -> str:
         "- 실제 주문 실행: 비활성화",
         "- order_enabled=false",
         f"- model_status: {payload.get('model_status')}",
+        f"- model_source: {payload.get('model_source')}",
+        f"- calibrated: {payload.get('calibrated')}",
         f"- snapshot_date: {payload.get('snapshot_date')}",
         f"- best_threshold: {payload.get('best_threshold')}",
         "",
@@ -115,6 +127,72 @@ def read_dataset():
     if not MODEL_DATASET_CSV_PATH.exists():
         return pd.DataFrame()
     return pd.read_csv(MODEL_DATASET_CSV_PATH)
+
+
+def resolve_model_context(registry: Dict[str, Any]) -> Dict[str, Any]:
+    if ACTIVE_CALIBRATED_OUTPERFORM_MODEL_PATH.exists() and ACTIVE_FEATURE_COLUMNS_PATH.exists():
+        return {
+            "model_source": "active",
+            "calibrated": True,
+            "classifier_path": ACTIVE_CALIBRATED_OUTPERFORM_MODEL_PATH,
+            "return_model_path": ACTIVE_XGB_RETURN_MODEL_PATH if ACTIVE_XGB_RETURN_MODEL_PATH.exists() else XGB_RETURN_MODEL_PATH,
+            "drawdown_model_path": ACTIVE_XGB_DRAWDOWN_MODEL_PATH if ACTIVE_XGB_DRAWDOWN_MODEL_PATH.exists() else XGB_DRAWDOWN_MODEL_PATH,
+            "feature_columns_path": ACTIVE_FEATURE_COLUMNS_PATH,
+            "experiment_id": registry.get("active_experiment_id") or registry.get("active_model_version"),
+        }
+    if ACTIVE_XGB_OUTPERFORM_MODEL_PATH.exists() and ACTIVE_FEATURE_COLUMNS_PATH.exists():
+        return {
+            "model_source": "active",
+            "calibrated": False,
+            "classifier_path": ACTIVE_XGB_OUTPERFORM_MODEL_PATH,
+            "return_model_path": ACTIVE_XGB_RETURN_MODEL_PATH if ACTIVE_XGB_RETURN_MODEL_PATH.exists() else XGB_RETURN_MODEL_PATH,
+            "drawdown_model_path": ACTIVE_XGB_DRAWDOWN_MODEL_PATH if ACTIVE_XGB_DRAWDOWN_MODEL_PATH.exists() else XGB_DRAWDOWN_MODEL_PATH,
+            "feature_columns_path": ACTIVE_FEATURE_COLUMNS_PATH,
+            "experiment_id": registry.get("active_experiment_id") or registry.get("active_model_version"),
+        }
+    if ACTIVE_CLASSIFIER_JOBLIB_PATH.exists() and ACTIVE_FEATURE_COLUMNS_PATH.exists():
+        return {
+            "model_source": "active",
+            "calibrated": False,
+            "classifier_path": ACTIVE_CLASSIFIER_JOBLIB_PATH,
+            "return_model_path": ACTIVE_XGB_RETURN_MODEL_PATH if ACTIVE_XGB_RETURN_MODEL_PATH.exists() else XGB_RETURN_MODEL_PATH,
+            "drawdown_model_path": ACTIVE_XGB_DRAWDOWN_MODEL_PATH if ACTIVE_XGB_DRAWDOWN_MODEL_PATH.exists() else XGB_DRAWDOWN_MODEL_PATH,
+            "feature_columns_path": ACTIVE_FEATURE_COLUMNS_PATH,
+            "experiment_id": registry.get("active_experiment_id") or registry.get("active_model_version"),
+        }
+    if XGB_OUTPERFORM_MODEL_PATH.exists() and FEATURE_COLUMNS_PATH.exists():
+        return {
+            "model_source": "fallback",
+            "calibrated": False,
+            "classifier_path": XGB_OUTPERFORM_MODEL_PATH,
+            "return_model_path": XGB_RETURN_MODEL_PATH,
+            "drawdown_model_path": XGB_DRAWDOWN_MODEL_PATH,
+            "feature_columns_path": FEATURE_COLUMNS_PATH,
+            "experiment_id": registry.get("latest_train_experiment_id") or registry.get("active_model_version"),
+        }
+    return {}
+
+
+def load_classifier(path, calibrated: bool):
+    if calibrated or str(path).endswith(".joblib"):
+        import joblib
+
+        return joblib.load(path)
+    from xgboost import XGBClassifier
+
+    model = XGBClassifier()
+    model.load_model(path)
+    return model
+
+
+def load_regressor(path):
+    if not path or not path.exists():
+        return None
+    from xgboost import XGBRegressor
+
+    model = XGBRegressor()
+    model.load_model(path)
+    return model
 
 
 def build_matrix(df, numeric_columns: List[str], categorical_columns: List[str], numeric_medians: Dict[str, float], encoded_columns: List[str]):
@@ -183,15 +261,11 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
         return no_model_payload(str(snapshot_date), "해당 snapshot_date row가 없습니다.", status="insufficient_features")
 
     registry = load_json(MODEL_REGISTRY_PATH, {})
-    if registry.get("model_status") != "trained":
-        return no_model_payload(str(snapshot_date), "model_registry.json이 없거나 trained 상태가 아닙니다.")
+    model_context = resolve_model_context(registry)
+    if not model_context:
+        return no_model_payload(str(snapshot_date), "active/fallback 모델 파일이 없습니다.")
 
-    required_paths = [FEATURE_COLUMNS_PATH, XGB_OUTPERFORM_MODEL_PATH, XGB_RETURN_MODEL_PATH]
-    missing = [str(path) for path in required_paths if not path.exists()]
-    if missing:
-        return no_model_payload(str(snapshot_date), f"필수 모델 파일이 없습니다: {', '.join(missing)}")
-
-    feature_meta = load_json(FEATURE_COLUMNS_PATH, {})
+    feature_meta = load_json(model_context["feature_columns_path"], {})
     numeric_columns = feature_meta.get("numeric_columns", [])
     categorical_columns = feature_meta.get("categorical_columns", [])
     numeric_medians = feature_meta.get("numeric_medians", {})
@@ -199,28 +273,22 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
     if not encoded_columns:
         return no_model_payload(str(snapshot_date), "feature_columns.json에 encoded_columns가 없습니다.", status="insufficient_features")
 
-    try:
-        from xgboost import XGBClassifier, XGBRegressor
-    except Exception as exc:
-        return no_model_payload(str(snapshot_date), f"xgboost import 실패: {exc}")
-
     X = build_matrix(target, numeric_columns, categorical_columns, numeric_medians, encoded_columns)
     if X.empty:
         return no_model_payload(str(snapshot_date), "예측 feature matrix가 비어 있습니다.", status="insufficient_features")
 
-    classifier = XGBClassifier()
-    classifier.load_model(XGB_OUTPERFORM_MODEL_PATH)
-    return_model = XGBRegressor()
-    return_model.load_model(XGB_RETURN_MODEL_PATH)
+    try:
+        classifier = load_classifier(model_context["classifier_path"], model_context.get("calibrated", False))
+        return_model = load_regressor(model_context.get("return_model_path"))
+    except Exception as exc:
+        return no_model_payload(str(snapshot_date), f"모델 로드 실패: {str(exc)[:300]}")
 
     outperform_prob = classifier.predict_proba(X)[:, 1]
-    predicted_return = return_model.predict(X)
+    predicted_return = return_model.predict(X) if return_model is not None else [0.0] * len(target)
 
     predicted_drawdown = [None] * len(target)
-    has_drawdown = XGB_DRAWDOWN_MODEL_PATH.exists()
-    if has_drawdown:
-        drawdown_model = XGBRegressor()
-        drawdown_model.load_model(XGB_DRAWDOWN_MODEL_PATH)
+    drawdown_model = load_regressor(model_context.get("drawdown_model_path"))
+    if drawdown_model is not None:
         predicted_drawdown = list(drawdown_model.predict(X))
 
     portfolio = load_json(PORTFOLIO_RECOMMENDATION_JSON_PATH, {})
@@ -256,6 +324,10 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
             "stock_code": code,
             "stock_name": row.get("stock_name"),
             "sector": row.get("sector"),
+            "model_source": model_context.get("model_source"),
+            "calibrated": bool(model_context.get("calibrated")),
+            "threshold_used": best_threshold,
+            "experiment_id": model_context.get("experiment_id"),
             "outperform_prob_5d": round(prob, 6),
             "predicted_return_5d": round(pred_ret, 6),
             "predicted_drawdown_5d": None if pred_dd is None else round(pred_dd, 6),
@@ -264,14 +336,19 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
             "signal_label": label,
             "model_version": model_version,
             "feature_warning": warnings,
+            "feature_group_warnings": [],
         }
 
     return {
         "generated_at": utc_now(),
         "mode": "ml_signal_generation",
         "model_status": "available",
+        "model_source": model_context.get("model_source"),
+        "calibrated": bool(model_context.get("calibrated")),
         "snapshot_date": str(snapshot_date),
         "best_threshold": best_threshold,
+        "threshold_used": best_threshold,
+        "experiment_id": model_context.get("experiment_id"),
         "signals": signals,
         "portfolio_generated_at": portfolio.get("generated_at"),
         "order_enabled": False,

@@ -366,6 +366,72 @@
       "--min-labeled-rows", "30"
     ]
   },
+  {
+    "name": "ML - Experiment Models",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/experiment_models.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--use-historical",
+      "--min-labeled-rows", "300",
+      "--min-dates", "30",
+      "--n-splits", "3"
+    ]
+  },
+  {
+    "name": "ML - Calibrate Model",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/calibrate_model.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--use-historical",
+      "--method", "sigmoid",
+      "--min-labeled-rows", "300"
+    ]
+  },
+  {
+    "name": "ML - Explain Model",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/explain_model.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--use-historical",
+      "--top-n", "30"
+    ]
+  },
+  {
+    "name": "ML - Promote Model Dry Run",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/promote_model.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--dry-run",
+      "--min-precision-at-3", "0.55",
+      "--min-top3-mean-return", "0.0",
+      "--max-drawdown-top3", "-0.05"
+    ]
+  },
+  {
+    "name": "ML - Research Pipeline",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/run_model_research_pipeline.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python"
+  },
     {
     "name": "Prices - Sync Daily",
     "type": "debugpy",

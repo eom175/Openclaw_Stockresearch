@@ -197,10 +197,11 @@ def should_exclude_buy(
     if yahoo_sector_risk_off(sector, yahoo_features):
         reasons.append("Yahoo global risk_off")
 
-    if ml_signal and parse_number(ml_signal.get("predicted_drawdown_5d"), 0.0) < -0.04:
+    ml_source = str(ml_signal.get("model_source") or "")
+    if ml_signal and ml_source == "active" and parse_number(ml_signal.get("predicted_drawdown_5d"), 0.0) < -0.04:
         reasons.append("ML predicted_drawdown_5d risk")
 
-    if ml_signal and str(ml_signal.get("signal_label") or "") == "avoid_or_sell_candidate":
+    if ml_signal and ml_source == "active" and str(ml_signal.get("signal_label") or "") == "avoid_or_sell_candidate":
         reasons.append("ML signal_label=avoid_or_sell_candidate")
 
     return reasons
@@ -356,17 +357,30 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
                 proposal_type = "new_buy"
 
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= 0.60:
-                reasons.append("ML outperform_prob_5d 우호")
-            if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= parse_number(inputs["ml_signals"].get("best_threshold"), 0.60):
-                reasons.append("ML best_threshold 이상")
+                if ml_signal.get("model_source") == "active":
+                    reasons.append("active ML outperform_prob_5d 우호")
+                else:
+                    warnings.append("fallback ML outperform_prob_5d 우호이나 보수적으로 해석")
+            if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= parse_number(ml_signal.get("threshold_used") or inputs["ml_signals"].get("best_threshold"), 0.60):
+                if ml_signal.get("model_source") == "active" and ml_signal.get("calibrated"):
+                    reasons.append("calibrated active ML threshold 이상")
+                elif ml_signal.get("model_source") == "active":
+                    reasons.append("active ML threshold 이상")
+                else:
+                    warnings.append("fallback ML threshold 이상이나 낮은 가중치로 참고")
             if ml_signal and parse_number(ml_signal.get("predicted_return_5d"), 0.0) > 0:
                 reasons.append("ML predicted_return_5d 양수")
             if ml_signal and str(ml_signal.get("signal_label") or "") == "strong_buy_candidate":
-                reasons.append("ML strong_buy_candidate")
+                if ml_signal.get("model_source") == "active":
+                    reasons.append("active ML strong_buy_candidate")
+                else:
+                    warnings.append("fallback ML strong_buy_candidate")
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 1.0) < 0.40:
                 warnings.append("ML outperform_prob_5d 약세")
             if ml_signal and str(ml_signal.get("signal_label") or "") == "avoid_or_sell_candidate":
-                warnings.append("ML avoid_or_sell_candidate")
+                warnings.append(f"ML avoid_or_sell_candidate source={ml_signal.get('model_source')}")
+            if ml_signal and not ml_signal.get("calibrated"):
+                warnings.append("ML probability is not calibrated; risk_guard 우선")
 
             proposal = build_proposal(
                 proposal_id=make_proposal_id(snapshot_date=today_yyyymmdd(), sequence=seq),

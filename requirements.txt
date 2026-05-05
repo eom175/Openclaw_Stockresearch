@@ -4,3 +4,4 @@ yfinance
 xgboost
 scikit-learn
 joblib
+shap

@@ -227,7 +227,7 @@ XGBoost 기반 ML 신호와 모델 품질 검증을 사용하려면 `xgboost`, `
 
 ```bash
 cd /Users/eomjiyong/policy-research
-/Users/eomjiyong/policy-research/.venv/bin/pip install xgboost scikit-learn pandas numpy joblib
+/Users/eomjiyong/policy-research/.venv/bin/pip install xgboost scikit-learn pandas numpy joblib shap
 ```
 
 macOS에서 XGBoost가 `libomp.dylib` 누락으로 로딩되지 않으면 OpenMP runtime 설치가 필요하다.
@@ -275,6 +275,43 @@ VS Code에서는 `Dataset - Audit`, `ML - Train Models`, `ML - Predict Signals`,
 `audit_dataset.py`는 row 수, 라벨 상태, class balance, missing ratio, duplicate key, leakage 의심 컬럼, feature freshness를 점검한다. `train_model.py`는 TimeSeriesSplit/walk-forward 방식으로 검증하며 랜덤 train/test split을 쓰지 않는다. labeled row와 snapshot_date가 충분하지 않으면 `train_model.py`는 실패하지 않고 “학습 보류” no-op 리포트를 만든다. 모델 파일이 없으면 `predict_signals.py`도 실패하지 않고 `no_model` 상태의 ML 신호 리포트를 만든다. `backtest_signals.py`는 snapshot_date별 top-k 단순 백테스트를 만들며, 데이터가 부족하면 no-op 리포트를 만든다. XGBoost 모델은 주문 후보 생성의 보조 점수로만 사용하며, 매수/매도 확정이나 주문 실행 기능이 아니다.
 
 `train_model.py`와 `backtest_signals.py`는 `--use-historical` 또는 `--dataset-path` 옵션으로 historical dataset을 입력받을 수 있다.
+
+## 모델 실험 관리
+
+자동매매로 넘어가기 전에는 단일 학습 결과보다 feature group과 모델 설정을 비교하는 실험 관리가 중요하다. `experiment_models.py`는 price, flow, DART, Naver, Yahoo, research, account 그룹 조합별로 walk-forward 검증을 수행해 어떤 데이터가 실제 예측력에 기여하는지 비교한다.
+
+모델 연구 파이프라인은 무거운 작업이므로 daily `run_full_pipeline.py`에 넣지 않는다. 수동 실행 또는 주 1회 실행을 권장한다.
+
+```bash
+cd /Users/eomjiyong/policy-research
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/run_model_research_pipeline.py
+```
+
+개별 실행:
+
+```bash
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/experiment_models.py --use-historical --min-labeled-rows 300 --min-dates 30 --n-splits 3
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/calibrate_model.py --use-historical --method sigmoid --min-labeled-rows 300
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/explain_model.py --use-historical --top-n 30
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/promote_model.py --dry-run --min-precision-at-3 0.55 --min-top3-mean-return 0.0 --max-drawdown-top3 -0.05
+```
+
+생성 파일:
+
+- `reports/experiment_results.json`
+- `reports/experiment_report.md`
+- `reports/calibration_report.json`
+- `reports/calibration_report.md`
+- `reports/model_explainability.json`
+- `reports/model_explainability.md`
+- `reports/model_promotion_report.md`
+- `reports/model_research_pipeline_report.md`
+- `models/experiments/`
+- `models/active/`, 승격 시
+
+Calibration은 `outperform_prob_5d`가 실제 확률에 가까운지 확인하고 필요하면 sigmoid 또는 isotonic 보정을 적용하는 과정이다. `explain_model.py`는 SHAP을 사용할 수 있으면 SHAP 기반 설명성을 만들고, 불가능하면 permutation importance 또는 모델 내장 importance로 fallback한다. `promote_model.py`는 precision@3, top3 평균 수익률, drawdown, excess return 기준을 통과한 모델만 active 경로로 승격한다. `--dry-run`은 파일 복사 없이 승격 가능성만 검토하는 안전한 기본 운영 방식이다.
+
+active model이 생겨도 ML 신호는 주문 확정이 아니라 order proposal의 보조 점수다. 모든 주문 후보는 계속 `risk_guard.py`를 통과해야 하며 실제 주문 실행은 비활성화 상태다.
 
 ## 주문 후보 생성
 

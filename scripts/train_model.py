@@ -16,6 +16,7 @@ from policylink.paths import (
     FEATURE_COLUMNS_PATH,
     HISTORICAL_MODEL_DATASET_CSV_PATH,
     MODEL_DATASET_CSV_PATH,
+    MODEL_EXPERIMENTS_DIR,
     MODEL_QUALITY_METRICS_PATH,
     MODEL_QUALITY_REPORT_PATH,
     MODEL_REGISTRY_PATH,
@@ -511,10 +512,15 @@ def save_model_metadata(path, model_name: str, metrics: Dict[str, Any], row_coun
 
 
 def registry_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+    existing = load_json(MODEL_REGISTRY_PATH, {})
+    registry = {
         "generated_at": result.get("generated_at"),
-        "model_status": result.get("model_registry_status", result.get("training_status")),
-        "active_model_version": result.get("active_model_version"),
+        "model_status": existing.get("model_status") if existing.get("active_model") else result.get("model_registry_status", result.get("training_status")),
+        "active_model_version": existing.get("active_model_version") if existing.get("active_model") else result.get("active_model_version"),
+        "latest_train_status": result.get("training_status"),
+        "latest_train_registry_status": result.get("model_registry_status"),
+        "latest_train_dataset_path": result.get("dataset_path"),
+        "latest_train_experiment_id": result.get("train_experiment_id"),
         "best_threshold": result.get("best_threshold", 0.60),
         "row_count": result.get("row_count", 0),
         "labeled_row_count": result.get("labeled_rows", 0),
@@ -539,6 +545,11 @@ def registry_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
         "feature_columns_path": str(FEATURE_COLUMNS_PATH),
         "order_enabled": False,
     }
+    if existing.get("active_model"):
+        registry["active_model"] = existing.get("active_model")
+        registry["active_experiment_id"] = existing.get("active_experiment_id")
+        registry["active_metrics"] = existing.get("active_metrics")
+    return registry
 
 
 def no_op_result(status: str, reason: str, row_count: int = 0, labeled_rows: int = 0, date_count: int = 0) -> Dict[str, Any]:
@@ -737,8 +748,12 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
 
     date_range = {"min": str(labeled["snapshot_date"].min()), "max": str(labeled["snapshot_date"].max())}
     active_version = model_version()
+    train_experiment_id = f"train_{active_version}"
+    train_experiment_dir = MODEL_EXPERIMENTS_DIR / train_experiment_id
+    train_experiment_dir.mkdir(parents=True, exist_ok=True)
     metrics: Dict[str, Any] = {}
     models: Dict[str, str] = {}
+    experiment_models: Dict[str, str] = {}
     importances: Dict[str, Any] = {}
 
     y_class = labeled[TARGET_COLUMNS["classification"]].astype(int)
@@ -748,14 +763,18 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
     best_threshold = threshold_info.get("best_threshold", 0.60)
     if classifier is not None:
         classifier.save_model(XGB_OUTPERFORM_MODEL_PATH)
+        classifier.save_model(train_experiment_dir / "xgb_outperform_5d.json")
         models["outperform_5d"] = str(XGB_OUTPERFORM_MODEL_PATH)
+        experiment_models["outperform_5d"] = str(train_experiment_dir / "xgb_outperform_5d.json")
         importances["outperform_5d"] = feature_importance(classifier, encoded_columns)
         save_model_metadata(XGB_OUTPERFORM_METADATA_PATH, "xgb_outperform_5d", class_metrics, labeled_rows, date_range)
 
     y_return = labeled[TARGET_COLUMNS["return_regression"]].astype(float)
     return_model, return_metrics = fit_regressor(X, y_return, splits, args.random_state)
     return_model.save_model(XGB_RETURN_MODEL_PATH)
+    return_model.save_model(train_experiment_dir / "xgb_return_5d.json")
     models["return_5d"] = str(XGB_RETURN_MODEL_PATH)
+    experiment_models["return_5d"] = str(train_experiment_dir / "xgb_return_5d.json")
     metrics["return_5d"] = return_metrics
     importances["return_5d"] = feature_importance(return_model, encoded_columns)
     save_model_metadata(XGB_RETURN_METADATA_PATH, "xgb_return_5d", return_metrics, labeled_rows, date_range)
@@ -768,7 +787,9 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
             y_drawdown = drawdown_data["future_max_drawdown_5d"].astype(float)
             drawdown_model, drawdown_metrics = fit_regressor(X_drawdown, y_drawdown, drawdown_splits, args.random_state)
             drawdown_model.save_model(XGB_DRAWDOWN_MODEL_PATH)
+            drawdown_model.save_model(train_experiment_dir / "xgb_drawdown_5d.json")
             models["drawdown_5d"] = str(XGB_DRAWDOWN_MODEL_PATH)
+            experiment_models["drawdown_5d"] = str(train_experiment_dir / "xgb_drawdown_5d.json")
             metrics["drawdown_5d"] = drawdown_metrics
             importances["drawdown_5d"] = feature_importance(drawdown_model, encoded_columns)
             save_model_metadata(XGB_DRAWDOWN_METADATA_PATH, "xgb_drawdown_5d", drawdown_metrics, len(drawdown_data), date_range)
@@ -789,6 +810,7 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
         "active_model_version": active_version,
     }
     save_json(FEATURE_COLUMNS_PATH, feature_columns)
+    save_json(train_experiment_dir / "feature_columns.json", feature_columns)
 
     ablation = ablation_summary(args, labeled, numeric_columns, categorical_columns)
     return {
@@ -798,12 +820,18 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
         "training_status": "trained" if models else "no_op",
         "model_registry_status": "trained" if models else "no_op_insufficient_data",
         "active_model_version": active_version if models else None,
+        "train_experiment_id": train_experiment_id if models else None,
         "best_threshold": best_threshold,
         "row_count": len(df),
         "labeled_rows": labeled_rows,
         "date_count": date_count,
         "date_range": date_range,
         "models": models,
+        "experiment_artifacts": {
+            "experiment_dir": str(train_experiment_dir),
+            "models": experiment_models,
+            "feature_columns_path": str(train_experiment_dir / "feature_columns.json"),
+        } if models else {},
         "metrics": metrics,
         "feature_importance_top30": importances,
         "ablation": ablation,

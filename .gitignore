@@ -22,6 +22,8 @@ reports/*access*
 
 models/*.json
 models/*.joblib
+models/experiments/
+models/active/
 !models/.gitkeep
 
 .DS_Store
