@@ -110,6 +110,74 @@
       ]
     },
     {
+      "name": "Backfill - Market History",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/backfill_market_history.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--days", "252",
+        "--max-stocks", "10",
+        "--sleep", "0.7"
+      ]
+    },
+    {
+      "name": "Dataset - Build Historical",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/build_historical_dataset.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--min-history-days", "80",
+        "--horizon-days", "5",
+        "--max-snapshot-days", "180"
+      ]
+    },
+    {
+      "name": "Dataset - Audit Historical",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/audit_historical_dataset.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python"
+    },
+    {
+      "name": "ML - Train Historical",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/train_model.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--use-historical",
+        "--min-labeled-rows", "500",
+        "--min-dates", "60",
+        "--n-splits", "3"
+      ]
+    },
+    {
+      "name": "ML - Backtest Historical",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/backtest_signals.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--use-historical",
+        "--score-column", "final_score",
+        "--target-column", "future_return_5d",
+        "--top-k", "3",
+        "--min-labeled-rows", "100"
+      ]
+    },
+    {
     "name": "Kiwoom - Account Number Test",
     "type": "debugpy",
     "request": "launch",

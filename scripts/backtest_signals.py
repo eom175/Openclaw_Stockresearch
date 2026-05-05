@@ -10,7 +10,7 @@ from _bootstrap import add_src_to_path
 
 add_src_to_path()
 
-from policylink.paths import BACKTEST_METRICS_PATH, BACKTEST_REPORT_PATH, ML_SIGNALS_JSON_PATH, MODEL_DATASET_CSV_PATH, MODEL_REGISTRY_PATH
+from policylink.paths import BACKTEST_METRICS_PATH, BACKTEST_REPORT_PATH, HISTORICAL_MODEL_DATASET_CSV_PATH, ML_SIGNALS_JSON_PATH, MODEL_DATASET_CSV_PATH, MODEL_REGISTRY_PATH
 from policylink.utils import load_json
 
 
@@ -23,12 +23,23 @@ def save_json(path, value: Dict[str, Any]) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def read_dataset():
+def resolve_dataset_path(args: argparse.Namespace):
+    if args.dataset_path:
+        from pathlib import Path
+
+        return Path(args.dataset_path)
+    if args.use_historical:
+        return HISTORICAL_MODEL_DATASET_CSV_PATH
+    return MODEL_DATASET_CSV_PATH
+
+
+def read_dataset(args: argparse.Namespace):
     import pandas as pd
 
-    if not MODEL_DATASET_CSV_PATH.exists():
+    dataset_path = resolve_dataset_path(args)
+    if not dataset_path.exists():
         return pd.DataFrame()
-    return pd.read_csv(MODEL_DATASET_CSV_PATH)
+    return pd.read_csv(dataset_path)
 
 
 def no_op(reason: str, labeled_rows: int = 0) -> Dict[str, Any]:
@@ -77,13 +88,16 @@ def turnover_proxy(selected_by_date: Dict[str, set]) -> float:
 
 
 def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
-    df = read_dataset()
+    dataset_path = resolve_dataset_path(args)
+    df = read_dataset(args)
     labeled = labeled_frame(df, args.target_column, args.score_column)
     if len(labeled) < args.min_labeled_rows:
-        return no_op(
+        result = no_op(
             f"labeled rows {len(labeled)}개 < min_labeled_rows={args.min_labeled_rows}",
             labeled_rows=len(labeled),
         )
+        result["dataset_path"] = str(dataset_path)
+        return result
 
     selected_parts = []
     selected_by_date: Dict[str, set] = {}
@@ -93,7 +107,9 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
         selected_by_date[str(snapshot_date)] = set(top.get("stock_code", []))
 
     if not selected_parts:
-        return no_op("snapshot_date별 top_k 선택 결과가 없습니다.", labeled_rows=len(labeled))
+        result = no_op("snapshot_date별 top_k 선택 결과가 없습니다.", labeled_rows=len(labeled))
+        result["dataset_path"] = str(dataset_path)
+        return result
 
     import pandas as pd
 
@@ -123,6 +139,7 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
     return {
         "generated_at": utc_now(),
         "mode": "signal_backtest",
+        "dataset_path": str(dataset_path),
         "backtest_status": "completed",
         "model_status": registry.get("model_status"),
         "ml_signal_status": ml_signals.get("model_status"),
@@ -139,6 +156,7 @@ def build_report(result: Dict[str, Any]) -> str:
         "- 실제 주문 실행: 비활성화",
         "- order_enabled=false",
         f"- backtest_status: {result.get('backtest_status')}",
+        f"- dataset_path: {result.get('dataset_path')}",
         "",
     ]
     if result.get("backtest_status") == "no_op":
@@ -161,6 +179,8 @@ def build_report(result: Dict[str, Any]) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Backtest rule/ML scores on labeled model_dataset rows.")
+    parser.add_argument("--dataset-path")
+    parser.add_argument("--use-historical", action="store_true")
     parser.add_argument("--score-column", default="final_score")
     parser.add_argument("--target-column", default="future_return_5d")
     parser.add_argument("--top-k", type=int, default=3)

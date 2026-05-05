@@ -8,6 +8,7 @@ raw/
 data/*.json
 data/*.jsonl
 data/*.csv
+data/backfill/
 data/*token*
 data/*secret*
 data/*access*

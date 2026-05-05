@@ -6,6 +6,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 RAW_DIR = PROJECT_ROOT / "raw"
 MODELS_DIR = PROJECT_ROOT / "models"
+BACKFILL_DIR = DATA_DIR / "backfill"
 
 CANDIDATES_PATH = DATA_DIR / "candidates.compact.json"
 PRICES_DAILY_PATH = DATA_DIR / "prices_daily.json"
@@ -22,7 +23,15 @@ YAHOO_NEWS_PATH = DATA_DIR / "yahoo_news.json"
 YAHOO_GLOBAL_FEATURES_PATH = DATA_DIR / "yahoo_global_features.json"
 MODEL_DATASET_JSONL_PATH = DATA_DIR / "model_dataset.jsonl"
 MODEL_DATASET_CSV_PATH = DATA_DIR / "model_dataset.csv"
+HISTORICAL_MODEL_DATASET_JSONL_PATH = DATA_DIR / "historical_model_dataset.jsonl"
+HISTORICAL_MODEL_DATASET_CSV_PATH = DATA_DIR / "historical_model_dataset.csv"
 ORDER_LEDGER_PATH = DATA_DIR / "order_ledger.jsonl"
+BACKFILL_STATUS_PATH = DATA_DIR / "backfill_status.json"
+BACKFILL_PRICES_DAILY_HISTORY_PATH = BACKFILL_DIR / "prices_daily_history.json"
+BACKFILL_FLOWS_DAILY_HISTORY_PATH = BACKFILL_DIR / "flows_daily_history.json"
+BACKFILL_DART_EVENTS_HISTORY_PATH = BACKFILL_DIR / "dart_events_history.json"
+BACKFILL_NAVER_NEWS_HISTORY_PATH = BACKFILL_DIR / "naver_news_history.json"
+BACKFILL_YAHOO_GLOBAL_HISTORY_PATH = BACKFILL_DIR / "yahoo_global_history.json"
 
 DAILY_FEATURES_PATH = REPORTS_DIR / "daily_features.json"
 DAILY_BRIEF_PATH = REPORTS_DIR / "daily_brief.md"
@@ -57,6 +66,10 @@ ML_SIGNALS_JSON_PATH = REPORTS_DIR / "ml_signals.json"
 ML_SIGNALS_MD_PATH = REPORTS_DIR / "ml_signals.md"
 BACKTEST_REPORT_PATH = REPORTS_DIR / "backtest_report.md"
 BACKTEST_METRICS_PATH = REPORTS_DIR / "backtest_metrics.json"
+BACKFILL_MARKET_HISTORY_REPORT_PATH = REPORTS_DIR / "backfill_market_history_report.md"
+HISTORICAL_DATASET_REPORT_PATH = REPORTS_DIR / "historical_dataset_report.md"
+HISTORICAL_DATASET_AUDIT_JSON_PATH = REPORTS_DIR / "historical_dataset_audit.json"
+HISTORICAL_DATASET_AUDIT_REPORT_PATH = REPORTS_DIR / "historical_dataset_audit_report.md"
 
 XGB_OUTPERFORM_MODEL_PATH = MODELS_DIR / "xgb_outperform_5d.json"
 XGB_RETURN_MODEL_PATH = MODELS_DIR / "xgb_return_5d.json"
@@ -70,6 +83,7 @@ MODEL_REGISTRY_PATH = MODELS_DIR / "model_registry.json"
 
 def ensure_project_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    BACKFILL_DIR.mkdir(parents=True, exist_ok=True)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)

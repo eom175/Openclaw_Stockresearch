@@ -50,6 +50,15 @@
 - 모델 파일, 리포트, 로그에 credential, access token, 계좌번호 원문을 저장하지 않는다.
 - labeled row가 부족한 학습 no-op과 모델이 없는 예측 no_model은 정상 상태로 처리한다.
 
+## Historical Backfill 규칙
+
+- historical dataset 생성 시 미래 데이터 누수를 금지한다.
+- 각 `snapshot_date`의 feature에는 `snapshot_date` 이후 데이터를 쓰지 않는다.
+- `future_*` 컬럼은 target 전용이며 학습 feature로 사용하지 않는다.
+- Naver/Yahoo/DART raw 원문 전체를 장기 저장하지 않는다.
+- backfill 과정에서도 credential, access token, 계좌번호 원문을 출력하거나 리포트에 저장하지 않는다.
+- historical backfill은 주문 실행과 무관하며 Kiwoom 주문 TR을 호출하지 않는다.
+
 ## 운영 구조
 
 - 자동화는 OpenClaw Gateway + Cron이 담당한다.

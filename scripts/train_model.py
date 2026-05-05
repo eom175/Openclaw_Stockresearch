@@ -14,6 +14,7 @@ add_src_to_path()
 from policylink.paths import (
     DATASET_AUDIT_JSON_PATH,
     FEATURE_COLUMNS_PATH,
+    HISTORICAL_MODEL_DATASET_CSV_PATH,
     MODEL_DATASET_CSV_PATH,
     MODEL_QUALITY_METRICS_PATH,
     MODEL_QUALITY_REPORT_PATH,
@@ -86,12 +87,23 @@ def finite_float(value: Any) -> Optional[float]:
         return None
 
 
-def read_dataset():
+def resolve_dataset_path(args: argparse.Namespace):
+    if args.dataset_path:
+        from pathlib import Path
+
+        return Path(args.dataset_path)
+    if args.use_historical:
+        return HISTORICAL_MODEL_DATASET_CSV_PATH
+    return MODEL_DATASET_CSV_PATH
+
+
+def read_dataset(args: argparse.Namespace):
     import pandas as pd
 
-    if not MODEL_DATASET_CSV_PATH.exists():
+    dataset_path = resolve_dataset_path(args)
+    if not dataset_path.exists():
         return pd.DataFrame()
-    return pd.read_csv(MODEL_DATASET_CSV_PATH)
+    return pd.read_csv(dataset_path)
 
 
 def labeled_frame(df):
@@ -478,6 +490,15 @@ def ablation_summary(args, labeled, numeric_columns: List[str], categorical_colu
     return result
 
 
+def xgboost_unavailable_reason() -> Optional[str]:
+    try:
+        import xgboost  # noqa: F401
+        return None
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
+        return f"XGBoost runtime을 사용할 수 없습니다: {first_line}"
+
+
 def save_model_metadata(path, model_name: str, metrics: Dict[str, Any], row_count: int, date_range: Dict[str, Any]) -> None:
     save_json(path, {
         "model_name": model_name,
@@ -534,6 +555,7 @@ def no_op_result(status: str, reason: str, row_count: int = 0, labeled_rows: int
         "labeled_rows": labeled_rows,
         "date_count": date_count,
         "date_range": {},
+        "dataset_path": None,
         "models": {},
         "metrics": {},
         "feature_importance_top30": {},
@@ -551,6 +573,7 @@ def build_training_report(result: Dict[str, Any]) -> str:
         "- order_enabled=false",
         f"- training_status: {result.get('training_status')}",
         f"- model_registry_status: {result.get('model_registry_status')}",
+        f"- dataset_path: {result.get('dataset_path')}",
         "",
     ]
     if result.get("training_status") == "no_op":
@@ -639,57 +662,78 @@ def write_outputs(result: Dict[str, Any]) -> None:
 
 def train(args: argparse.Namespace) -> Dict[str, Any]:
     ensure_project_dirs()
-    df = read_dataset()
+    dataset_path = resolve_dataset_path(args)
+    df = read_dataset(args)
     if df.empty:
-        return no_op_result("no_op_insufficient_data", "data/model_dataset.csv가 없거나 비어 있습니다.")
+        result = no_op_result("no_op_insufficient_data", f"{dataset_path} 파일이 없거나 비어 있습니다.")
+        result["dataset_path"] = str(dataset_path)
+        return result
 
     labeled = labeled_frame(df)
     labeled_rows = len(labeled)
     date_count = labeled["snapshot_date"].nunique() if not labeled.empty and "snapshot_date" in labeled.columns else 0
 
-    audit = load_json(DATASET_AUDIT_JSON_PATH, {})
+    audit = load_json(DATASET_AUDIT_JSON_PATH, {}) if not args.use_historical and not args.dataset_path else {}
     if audit.get("warning_level") == "BLOCK_TRAINING" and not args.force:
-        return no_op_result(
+        result = no_op_result(
             "blocked_by_audit",
             "dataset audit가 BLOCK_TRAINING 상태입니다: " + "; ".join(audit.get("blocking_reasons", [])[:5]),
             row_count=len(df),
             labeled_rows=labeled_rows,
             date_count=date_count,
         )
+        result["dataset_path"] = str(dataset_path)
+        return result
 
     if not args.force and labeled_rows < args.min_labeled_rows:
-        return no_op_result(
+        result = no_op_result(
             "no_op_insufficient_data",
             f"학습 가능 labeled row 수가 {labeled_rows}개로 min_labeled_rows={args.min_labeled_rows}보다 적습니다.",
             row_count=len(df),
             labeled_rows=labeled_rows,
             date_count=date_count,
         )
+        result["dataset_path"] = str(dataset_path)
+        return result
     if not args.force and date_count < args.min_dates:
-        return no_op_result(
+        result = no_op_result(
             "no_op_insufficient_data",
             f"snapshot_date 수가 {date_count}개로 min_dates={args.min_dates}보다 적습니다.",
             row_count=len(df),
             labeled_rows=labeled_rows,
             date_count=date_count,
         )
+        result["dataset_path"] = str(dataset_path)
+        return result
     if labeled_rows < 8 or date_count < 3:
-        return no_op_result(
+        result = no_op_result(
             "no_op_insufficient_data",
             "walk-forward 검증에 필요한 최소 row/date가 부족합니다.",
             row_count=len(df),
             labeled_rows=labeled_rows,
             date_count=date_count,
         )
+        result["dataset_path"] = str(dataset_path)
+        return result
+
+    dependency_reason = xgboost_unavailable_reason()
+    if dependency_reason:
+        result = no_op_result("no_op_dependency_unavailable", dependency_reason, len(df), labeled_rows, date_count)
+        result["dataset_path"] = str(dataset_path)
+        return result
 
     numeric_columns, categorical_columns, numeric_medians = choose_feature_columns(labeled, args.max_features)
     X, encoded_columns = build_matrix(labeled, numeric_columns, categorical_columns, numeric_medians)
     if X.empty or not encoded_columns:
-        return no_op_result("no_op_insufficient_data", "사용 가능한 feature column이 없습니다.", len(df), labeled_rows, date_count)
+        result = no_op_result("no_op_insufficient_data", "사용 가능한 feature column이 없습니다.", len(df), labeled_rows, date_count)
+        result["dataset_path"] = str(dataset_path)
+        return result
 
     splits = walk_forward_splits(labeled, args.n_splits, args.test_size_days, args.gap_days)
     if not splits:
-        return no_op_result("no_op_insufficient_data", "walk-forward split을 만들 수 없습니다.", len(df), labeled_rows, date_count)
+        result = no_op_result("no_op_insufficient_data", "walk-forward split을 만들 수 없습니다.", len(df), labeled_rows, date_count)
+        result["dataset_path"] = str(dataset_path)
+        return result
 
     date_range = {"min": str(labeled["snapshot_date"].min()), "max": str(labeled["snapshot_date"].max())}
     active_version = model_version()
@@ -750,6 +794,7 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
     return {
         "generated_at": utc_now(),
         "mode": "xgboost_training",
+        "dataset_path": str(dataset_path),
         "training_status": "trained" if models else "no_op",
         "model_registry_status": "trained" if models else "no_op_insufficient_data",
         "active_model_version": active_version if models else None,
@@ -769,6 +814,8 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train and validate XGBoost models from labeled model_dataset.csv.")
+    parser.add_argument("--dataset-path")
+    parser.add_argument("--use-historical", action="store_true")
     parser.add_argument("--min-labeled-rows", type=int, default=100)
     parser.add_argument("--min-dates", type=int, default=10)
     parser.add_argument("--n-splits", type=int, default=3)
