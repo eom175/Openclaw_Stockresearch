@@ -31,10 +31,11 @@ cd /Users/eomjiyong/policy-research
 6. `sync_prices.py --max-stocks 10 --sleep 0.7`
 7. `sync_flows.py --max-stocks 5 --sleep 1.2`
 8. `recommend_portfolio.py`
-9. `build_dataset.py`
-10. `label_dataset.py`
+9. `generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000`
+10. `build_dataset.py`
+11. `label_dataset.py`
 
-주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. DART/뉴스/Yahoo 수집 실패는 warning으로 기록하고 가격/수급/추천 파이프라인은 계속 진행한다.
+주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. 주문 후보 생성 단계도 `proposal_only=true`, `order_enabled=false`이며 키움 주문 API를 호출하지 않는다. DART/뉴스/Yahoo 수집 실패는 warning으로 기록하고 가격/수급/추천 파이프라인은 계속 진행한다.
 
 ## OpenClaw Cron 예시
 
@@ -66,6 +67,11 @@ Telegram 요약에는 `reports/portfolio_recommendation.md`, `reports/model_data
 - `reports/yahoo_finance_sync_diagnostic.json`
 - `reports/yahoo_global_features.md`
 - `reports/portfolio_recommendation.md`
+- `reports/order_proposals.json`
+- `reports/order_proposals.md`
+- `reports/order_risk_check.json`
+- `reports/order_risk_check.md`
+- `data/order_ledger.jsonl`
 - `data/model_dataset.jsonl`
 - `data/model_dataset.csv`
 - `reports/label_dataset_report.md`
@@ -152,6 +158,31 @@ VS Code에서는 `Yahoo - Collect Global Features` launch 메뉴를 사용한다
 - `reports/yahoo_global_features.md`
 
 Yahoo Finance/yfinance 데이터는 공식 제휴 API가 아니므로 내부 연구/교육 목적 compact feature로만 사용한다. 기사 원문 전체는 저장하지 않고 제목, 요약, URL, 발행시각, 관련 ticker와 proxy별 점수만 저장한다.
+
+## 주문 후보 생성
+
+주문 후보 생성은 추천 리포트를 바탕으로 매수/매도 검토 후보만 만들며 실제 주문 실행은 비활성화되어 있다. `generate_order_proposals.py`와 `risk_guard.py`는 키움 주문 API 또는 주문 TR을 호출하지 않는다.
+
+수동 실행:
+
+```bash
+cd /Users/eomjiyong/policy-research
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000 --min-final-score 70 --min-price-score 55 --min-flow-score 55
+```
+
+VS Code에서는 `Orders - Generate Proposals` launch 메뉴를 사용한다.
+
+생성 파일:
+
+- `reports/order_proposals.json`
+- `reports/order_proposals.md`
+- `reports/order_risk_check.json`
+- `reports/order_risk_check.md`
+- `data/order_ledger.jsonl`
+
+`risk_guard.py`는 mock mode, proposal_only, 하루 신규 진입 한도, 종목/섹터 비중, 미체결/주문대기 금액, 현금, 가격 추세/변동성, 수급, 공시/뉴스/Yahoo 리스크, 보유 여부, 중복 후보를 검사한다. `reports/order_proposals.md`와 `reports/order_risk_check.md`에서 후보와 reject 사유를 확인한다.
+
+다음 단계는 Telegram 승인형 `execute_approved_mock_order.py`를 별도로 만드는 것이며, 그 전까지 Telegram 승인 문구는 예시로만 표시한다.
 
 ## 주의사항
 

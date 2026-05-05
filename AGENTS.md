@@ -31,6 +31,14 @@
 
 추천 시스템은 주문을 만들거나 실행하지 않고, recommendation report 생성까지만 담당한다. `scripts/run_full_pipeline.py`에도 주문 스크립트를 포함하지 않는다.
 
+## 주문 후보 생성 규칙
+
+- `scripts/generate_order_proposals.py`와 `scripts/risk_guard.py`는 주문 후보와 리스크 검사만 수행한다.
+- 키움 주문 API 및 주문 TR 호출은 금지한다.
+- 자동매매는 아직 비활성화 상태다.
+- 모든 주문 후보 output은 `order_enabled=false` 또는 `proposal_only=true`를 명시한다.
+- `execute_approved_mock_order.py`가 생기기 전까지 Telegram 승인 문구는 예시로만 표시한다.
+
 ## 운영 구조
 
 - 자동화는 OpenClaw Gateway + Cron이 담당한다.

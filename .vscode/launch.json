@@ -229,6 +229,23 @@
     "cwd": "${workspaceFolder}",
     "python": "${workspaceFolder}/.venv/bin/python"
   },
+  {
+    "name": "Orders - Generate Proposals",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/generate_order_proposals.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--max-buy-candidates", "3",
+      "--max-sell-candidates", "3",
+      "--max-order-amount", "1000000",
+      "--min-final-score", "70",
+      "--min-price-score", "55",
+      "--min-flow-score", "55"
+    ]
+  },
     {
     "name": "Prices - Sync Daily",
     "type": "debugpy",

@@ -126,6 +126,7 @@ def main() -> int:
         PipelineStep("Prices - Sync Daily", [python, str(script_dir / "sync_prices.py"), "--max-stocks", "10", "--sleep", "0.7"]),
         PipelineStep("Flows - Sync Investor Flows", [python, str(script_dir / "sync_flows.py"), "--max-stocks", "5", "--sleep", "1.2"]),
         PipelineStep("Portfolio - Recommend", [python, str(script_dir / "recommend_portfolio.py")]),
+        PipelineStep("Orders - Generate Proposals", [python, str(script_dir / "generate_order_proposals.py"), "--max-buy-candidates", "3", "--max-sell-candidates", "3", "--max-order-amount", "1000000"]),
         PipelineStep("Dataset - Build Snapshot", [python, str(script_dir / "build_dataset.py")]),
         PipelineStep("Dataset - Label Future Returns", [python, str(script_dir / "label_dataset.py")]),
     ]
