@@ -1,0 +1,246 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Kiwoom - Token Test",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/diagnostics/kiwoom_token_test.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python"
+    },
+    {
+      "name": "Kiwoom - Account Snapshot Test",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/sync_account_test.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python"
+    },
+    {
+      "name": "Kiwoom - Mock BUY 1 Share",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/mock_order_test.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--side", "buy",
+        "--stock-code", "005930",
+        "--qty", "1",
+        "--price", "80000",
+        "--yes"
+      ]
+    },
+    {
+      "name": "Kiwoom - Mock SELL 1 Share",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/mock_order_test.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--side", "sell",
+        "--stock-code", "005930",
+        "--qty", "1",
+        "--price", "80000",
+        "--yes"
+      ]
+    },
+    {
+      "name": "Research - Collect 30 Days",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/collect_research.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--hours", "720",
+        "--max-items", "50"
+      ]
+    },
+    {
+      "name": "DART - Collect Disclosures",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/collect_dart.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--days", "90",
+        "--max-stocks", "10",
+        "--sleep", "0.3"
+      ]
+    },
+    {
+    "name": "Kiwoom - Account Number Test",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/diagnostics/kiwoom_account_number_test.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python"
+    },
+    {
+    "name": "Kiwoom - Mock BUY 1 Share",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/mock_order_test.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+        "--side", "buy",
+        "--stock-code", "005930",
+        "--qty", "1",
+        "--price", "221000",
+        "--yes"
+    ]
+    },
+    {
+    "name": "Kiwoom - Mock SELL 1 Share",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/mock_order_test.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+        "--side", "sell",
+        "--stock-code", "005930",
+        "--qty", "1",
+        "--price", "230000",
+        "--yes"
+    ]
+    },
+        {
+    "name": "Kiwoom - Daily Mock Account Report",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/kiwoom_daily_report.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python"
+    },
+    {
+    "name": "Kiwoom - Order Status Check",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/diagnostics/kiwoom_order_status.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python"
+    },
+    {
+    "name": "Kiwoom - Cancel Pending Orders",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/kiwoom_cancel_pending_order.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--stock-code", "005930",
+      "--yes"
+    ]
+  },
+    {
+    "name": "Kiwoom - Smart BUY 1 Share By Current Price",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/kiwoom_smart_buy.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--stock-code", "005930",
+      "--qty", "1",
+      "--slippage-bps", "50",
+      "--yes"
+    ]
+  },
+    {
+    "name": "Kiwoom - Balance Diagnostic",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/diagnostics/kiwoom_balance_diagnostic.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python"
+  },
+  {
+  "name": "Kiwoom - Smart SELL 1 Share By Current Price",
+  "type": "debugpy",
+  "request": "launch",
+  "program": "${workspaceFolder}/scripts/kiwoom_smart_sell.py",
+  "console": "integratedTerminal",
+  "cwd": "${workspaceFolder}",
+  "python": "${workspaceFolder}/.venv/bin/python",
+  "args": [
+    "--stock-code", "005930",
+    "--qty", "1",
+    "--slippage-bps", "50",
+    "--yes"
+  ]
+  },
+  {
+    "name": "Portfolio - Recommend",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/recommend_portfolio.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python"
+  },
+    {
+    "name": "Prices - Sync Daily",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/sync_prices.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--max-stocks", "10",
+      "--sleep", "0.7"
+    ]
+  },
+    {
+    "name": "Flows - Sync Investor Flows",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/sync_flows.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--max-stocks", "5",
+      "--sleep", "1.2"
+    ]
+  },
+    {
+    "name": "Dataset - Build Snapshot",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/build_dataset.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python"
+  },
+    {
+    "name": "Dataset - Label Future Returns",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/label_dataset.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python"
+  }
+  ]
+}
