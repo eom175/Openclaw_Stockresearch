@@ -7,10 +7,14 @@
 - `.env` 파일을 열람하거나 출력하지 않는다.
 - API key, secret, access token, authorization header, 계좌번호 원문을 터미널/리포트/문서에 출력하지 않는다.
 - `DART_API_KEY`는 절대 출력하지 않는다.
+- `NAVER_CLIENT_ID`와 `NAVER_CLIENT_SECRET`은 절대 출력하지 않는다.
 - Kiwoom 클라이언트와 파이프라인 리포트는 민감 키를 마스킹해야 한다.
 - 현재 환경은 키움증권 모의투자 REST API만 사용한다.
 - 공시 원문 전체를 reports에 복사하지 않는다.
 - 공시 수집은 compact metadata와 feature만 저장한다.
+- 뉴스 원문 전체를 reports에 복사하지 않는다.
+- 뉴스 수집은 제목/요약/URL/날짜와 compact feature만 저장한다.
+- 기사 본문 scraping은 하지 않는다.
 
 ## 주문 실행 금지
 

@@ -10,7 +10,7 @@ OpenClaw + Telegram + Kiwoom 모의투자 환경에서 국내주식/국내상장
 - 개발/디버깅: VS Code launch configurations
 - 거래 환경: Kiwoom REST API 모의투자
 
-`.env`에는 Kiwoom/OpenDART 접속 정보가 들어가므로 열람하거나 출력하지 않는다.
+`.env`에는 Kiwoom/OpenDART/Naver 접속 정보가 들어가므로 열람하거나 출력하지 않는다.
 
 ## 전체 파이프라인
 
@@ -23,14 +23,15 @@ cd /Users/eomjiyong/policy-research
 
 1. `collect_research.py --hours 720 --max-items 50`
 2. `collect_dart.py --days 90 --max-stocks 10 --sleep 0.3`
-3. `kiwoom_daily_report.py`
-4. `sync_prices.py --max-stocks 10 --sleep 0.7`
-5. `sync_flows.py --max-stocks 5 --sleep 1.2`
-6. `recommend_portfolio.py`
-7. `build_dataset.py`
-8. `label_dataset.py`
+3. `collect_naver_news.py --days 14 --max-stocks 10 --display 20 --sort date --sleep 0.3`
+4. `kiwoom_daily_report.py`
+5. `sync_prices.py --max-stocks 10 --sleep 0.7`
+6. `sync_flows.py --max-stocks 5 --sleep 1.2`
+7. `recommend_portfolio.py`
+8. `build_dataset.py`
+9. `label_dataset.py`
 
-주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. DART 수집 실패는 warning으로 기록하고 가격/수급/추천 파이프라인은 계속 진행한다.
+주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. DART/뉴스 수집 실패는 warning으로 기록하고 가격/수급/추천 파이프라인은 계속 진행한다.
 
 ## OpenClaw Cron 예시
 
@@ -47,11 +48,15 @@ Telegram 요약에는 `reports/portfolio_recommendation.md`, `reports/model_data
 - `data/dart_corp_codes.json`
 - `data/dart_disclosures.json`
 - `data/dart_event_features.json`
+- `data/naver_news.json`
+- `data/news_event_features.json`
 - `reports/kiwoom_mock_account_summary.json`
 - `data/price_features.json`
 - `data/flow_features.json`
 - `reports/dart_sync_diagnostic.json`
 - `reports/dart_disclosures.md`
+- `reports/naver_news_sync_diagnostic.json`
+- `reports/naver_news_features.md`
 - `reports/portfolio_recommendation.md`
 - `data/model_dataset.jsonl`
 - `data/model_dataset.csv`
@@ -89,6 +94,28 @@ VS Code에서는 `DART - Collect Disclosures` launch 메뉴를 사용한다.
 - `reports/dart_disclosures.md`
 
 공시 데이터는 원문 전체가 아니라 접수번호, 제목, 날짜, 회사명, 링크용 URL과 제목 기반 compact event feature로 저장한다.
+
+## Naver 뉴스 수집
+
+네이버 뉴스 검색 피처를 사용하려면 Naver Developers에서 애플리케이션을 등록하고 검색 API 사용 신청을 완료한 뒤 `.env`에 `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`을 추가한다. 두 값은 터미널, 리포트, 문서에 출력하지 않는다.
+
+수동 실행:
+
+```bash
+cd /Users/eomjiyong/policy-research
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/collect_naver_news.py --days 14 --max-stocks 10 --display 20 --sort date --sleep 0.3
+```
+
+VS Code에서는 `News - Collect Naver` launch 메뉴를 사용한다.
+
+생성 파일:
+
+- `data/naver_news.json`
+- `data/news_event_features.json`
+- `reports/naver_news_sync_diagnostic.json`
+- `reports/naver_news_features.md`
+
+뉴스 데이터는 기사 원문이 아니라 네이버 검색 API 응답의 제목, 요약, URL, 날짜와 compact keyword feature만 저장한다. 기사 본문 scraping은 하지 않는다.
 
 ## 주의사항
 

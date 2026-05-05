@@ -10,6 +10,7 @@ from policylink.paths import (
     MODEL_DATASET_CSV_PATH,
     MODEL_DATASET_JSONL_PATH,
     MODEL_DATASET_SNAPSHOT_PATH,
+    NEWS_EVENT_FEATURES_PATH,
     PORTFOLIO_RECOMMENDATION_JSON_PATH,
     PRICE_FEATURES_PATH,
     REPORTS_DIR,
@@ -111,6 +112,16 @@ CSV_COLUMNS = [
     "dart_embezzlement_breach",
     "dart_audit_opinion_risk",
     "dart_correction_delay",
+
+    "naver_news_count",
+    "naver_news_count_1d",
+    "naver_news_count_7d",
+    "naver_positive_keyword_count_7d",
+    "naver_negative_keyword_count_7d",
+    "naver_risk_keyword_count_7d",
+    "naver_attention_score",
+    "naver_sentiment_score",
+    "naver_news_label",
 
     "risk_level",
     "risk_score",
@@ -335,11 +346,51 @@ def build_dart_columns(feature: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return result
 
 
+def normalize_news_features(news_raw: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    features = news_raw.get("features", {}) if isinstance(news_raw, dict) else {}
+    if not isinstance(features, dict):
+        return {}
+
+    return {
+        normalize_code(code): item
+        for code, item in features.items()
+        if isinstance(item, dict)
+    }
+
+
+def build_news_columns(feature: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(feature, dict):
+        return {
+            "naver_news_count": 0,
+            "naver_news_count_1d": 0,
+            "naver_news_count_7d": 0,
+            "naver_positive_keyword_count_7d": 0,
+            "naver_negative_keyword_count_7d": 0,
+            "naver_risk_keyword_count_7d": 0,
+            "naver_attention_score": None,
+            "naver_sentiment_score": None,
+            "naver_news_label": None,
+        }
+
+    return {
+        "naver_news_count": feature.get("news_count", 0),
+        "naver_news_count_1d": feature.get("news_count_1d", 0),
+        "naver_news_count_7d": feature.get("news_count_7d", 0),
+        "naver_positive_keyword_count_7d": feature.get("positive_keyword_count_7d", 0),
+        "naver_negative_keyword_count_7d": feature.get("negative_keyword_count_7d", 0),
+        "naver_risk_keyword_count_7d": feature.get("risk_keyword_count_7d", 0),
+        "naver_attention_score": feature.get("attention_score"),
+        "naver_sentiment_score": feature.get("sentiment_score"),
+        "naver_news_label": feature.get("news_label"),
+    }
+
+
 def create_dataset_rows() -> List[Dict[str, Any]]:
     candidates = load_json(CANDIDATES_PATH, {"items": []})
     price_raw = load_json(PRICE_FEATURES_PATH, {"features": {}})
     flow_raw = load_json(FLOW_FEATURES_PATH, {"features": {}})
     dart_raw = load_json(DART_EVENT_FEATURES_PATH, {"features": {}})
+    news_raw = load_json(NEWS_EVENT_FEATURES_PATH, {"features": {}})
     account_summary = load_json(ACCOUNT_SUMMARY_PATH, {})
     recommendation = load_json(PORTFOLIO_RECOMMENDATION_PATH, {})
 
@@ -362,6 +413,7 @@ def create_dataset_rows() -> List[Dict[str, Any]]:
         for code, item in flow_features.items()
     }
     normalized_dart_features = normalize_dart_features(dart_raw)
+    normalized_news_features = normalize_news_features(news_raw)
 
     snapshot_date = get_snapshot_date(price_raw)
     generated_at = datetime.now(timezone.utc).isoformat()
@@ -413,6 +465,7 @@ def create_dataset_rows() -> List[Dict[str, Any]]:
         price = normalized_price_features.get(code, {})
         flow = normalized_flow_features.get(code, {})
         dart_columns = build_dart_columns(normalized_dart_features.get(code))
+        news_columns = build_news_columns(normalized_news_features.get(code))
         holding = holding_map.get(code, {})
 
         sector_rec = sector_map.get(sector, {})
@@ -482,6 +535,7 @@ def create_dataset_rows() -> List[Dict[str, Any]]:
             "flow_label": flow.get("flow_label"),
 
             **dart_columns,
+            **news_columns,
 
             "risk_level": research.get("risk_level"),
             "risk_score": research.get("risk_score"),

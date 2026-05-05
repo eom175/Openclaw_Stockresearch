@@ -13,6 +13,12 @@ class KiwoomSettings:
     secret_key: str
 
 
+@dataclass(frozen=True)
+class NaverSettings:
+    client_id: str
+    client_secret: str
+
+
 def load_kiwoom_settings() -> KiwoomSettings:
     load_dotenv(PROJECT_ROOT / ".env")
 
@@ -34,3 +40,14 @@ def load_dart_api_key() -> str:
         raise RuntimeError("DART_API_KEY is not configured.")
 
     return api_key
+
+
+def load_naver_settings() -> NaverSettings:
+    load_dotenv(PROJECT_ROOT / ".env")
+
+    client_id = os.getenv("NAVER_CLIENT_ID")
+    client_secret = os.getenv("NAVER_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise RuntimeError("NAVER_CLIENT_ID or NAVER_CLIENT_SECRET is not configured.")
+
+    return NaverSettings(client_id=client_id, client_secret=client_secret)

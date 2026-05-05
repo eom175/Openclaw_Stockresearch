@@ -79,6 +79,22 @@
       ]
     },
     {
+      "name": "News - Collect Naver",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/collect_naver_news.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--days", "14",
+        "--max-stocks", "10",
+        "--display", "20",
+        "--sort", "date",
+        "--sleep", "0.3"
+      ]
+    },
+    {
     "name": "Kiwoom - Account Number Test",
     "type": "debugpy",
     "request": "launch",

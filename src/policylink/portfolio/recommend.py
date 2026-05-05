@@ -10,6 +10,7 @@ from policylink.paths import (
     DATA_DIR,
     FLOW_FEATURES_PATH,
     KIWOOM_ACCOUNT_SUMMARY_PATH,
+    NEWS_EVENT_FEATURES_PATH,
     PORTFOLIO_RECOMMENDATION_JSON_PATH,
     PORTFOLIO_RECOMMENDATION_MD_PATH,
     PRICE_FEATURES_PATH,
@@ -279,6 +280,27 @@ def load_flow_features() -> Dict[str, Any]:
     }
 
 
+def load_news_features() -> Dict[str, Any]:
+    raw = load_json(NEWS_EVENT_FEATURES_PATH, {"features": {}, "sector_scores": {}})
+    features = raw.get("features", {})
+    sector_scores = raw.get("sector_scores", {})
+
+    if not isinstance(features, dict):
+        features = {}
+    if not isinstance(sector_scores, dict):
+        sector_scores = {}
+
+    normalized = {}
+    for code, item in features.items():
+        normalized[normalize_code(code)] = item
+
+    return {
+        "generated_at": raw.get("generated_at"),
+        "features": normalized,
+        "sector_scores": sector_scores,
+    }
+
+
 def price_feature_score(feature: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not feature:
         return {
@@ -466,6 +488,64 @@ def flow_feature_score(feature: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def news_feature_score(feature: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not feature:
+        return {
+            "score": 50.0,
+            "label": "no_news_data",
+            "action_hint": "뉴스 데이터 없음 / 중립 처리",
+            "reasons": ["news_event_features.json에 해당 종목 데이터가 없어 중립값 50으로 처리했습니다."],
+            "risk_penalty": 0.0,
+            "opportunity_bonus": 0.0,
+            "feature": None,
+        }
+
+    score = parse_number(feature.get("sentiment_score"), 50.0)
+    label = str(feature.get("news_label", "neutral"))
+    attention = parse_number(feature.get("attention_score"), 0.0)
+    positive_count = parse_number(feature.get("positive_keyword_count_7d"), 0)
+    negative_count = parse_number(feature.get("negative_keyword_count_7d"), 0)
+    risk_count = parse_number(feature.get("risk_keyword_count_7d"), 0)
+
+    reasons = [
+        f"뉴스 라벨 {label}",
+        f"관심도 {attention}",
+        f"긍정키워드 {int(positive_count)}",
+        f"부정키워드 {int(negative_count)}",
+        f"리스크키워드 {int(risk_count)}",
+    ]
+
+    risk_penalty = 0.0
+    opportunity_bonus = 0.0
+    if score < 40:
+        risk_penalty += 12.0
+    if negative_count >= 4:
+        risk_penalty += 8.0
+    if risk_count >= 5:
+        risk_penalty += 5.0
+    if score >= 65:
+        opportunity_bonus += 8.0
+    if positive_count >= 4 and negative_count <= 2:
+        opportunity_bonus += 5.0
+
+    if score >= 65:
+        action_hint = "뉴스 흐름 우호 / 가격·수급 확인 후 분할 접근 가능"
+    elif score >= 45:
+        action_hint = "뉴스 흐름 중립 / 기존 조건 우선"
+    else:
+        action_hint = "뉴스 흐름 약세 / 추가매수 금지"
+
+    return {
+        "score": round(clamp(score, 0.0, 100.0), 2),
+        "label": label,
+        "action_hint": action_hint,
+        "reasons": reasons,
+        "risk_penalty": round(risk_penalty, 2),
+        "opportunity_bonus": round(opportunity_bonus, 2),
+        "feature": feature,
+    }
+
+
 def build_sector_price_scores(price_features: Dict[str, Any]) -> Dict[str, Any]:
     features = price_features.get("features", {})
     grouped: Dict[str, List[Dict[str, Any]]] = {}
@@ -516,6 +596,39 @@ def build_sector_flow_scores(flow_features: Dict[str, Any]) -> Dict[str, Any]:
 
         result[sector] = {
             "flow_score": round(sum(item["score"] for item in items) / len(items), 2),
+            "risk_penalty": round(sum(item["risk_penalty"] for item in items) / len(items), 2),
+            "opportunity_bonus": round(sum(item["opportunity_bonus"] for item in items) / len(items), 2),
+            "items": items,
+        }
+
+    return result
+
+
+def build_sector_news_scores(news_features: Dict[str, Any]) -> Dict[str, Any]:
+    features = news_features.get("features", {})
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+
+    for code, feature in features.items():
+        sector = feature.get("sector") or KNOWN_STOCK_SECTOR.get(normalize_code(code), "unknown")
+        grouped.setdefault(sector, [])
+
+        scored = news_feature_score(feature)
+        scored["stock_code"] = normalize_code(code)
+        scored["stock_name"] = feature.get("stock_name", code)
+        grouped[sector].append(scored)
+
+    result = {}
+
+    for sector, items in grouped.items():
+        if not items:
+            continue
+
+        result[sector] = {
+            "news_score": round(sum(item["score"] for item in items) / len(items), 2),
+            "attention_score": round(
+                sum(parse_number((item.get("feature") or {}).get("attention_score"), 0.0) for item in items) / len(items),
+                2,
+            ),
             "risk_penalty": round(sum(item["risk_penalty"] for item in items) / len(items), 2),
             "opportunity_bonus": round(sum(item["opportunity_bonus"] for item in items) / len(items), 2),
             "items": items,
@@ -737,8 +850,16 @@ def combine_sector_scores(
     research: Dict[str, Any],
     sector_price_scores: Dict[str, Any],
     sector_flow_scores: Dict[str, Any],
+    sector_news_scores: Optional[Dict[str, Any]] = None,
+    has_news_features: bool = False,
 ) -> List[Dict[str, Any]]:
     combined = []
+    sector_news_scores = sector_news_scores or {}
+
+    if has_news_features:
+        weights = {"research": 0.40, "price": 0.28, "flow": 0.22, "news": 0.10}
+    else:
+        weights = {"research": 0.45, "price": 0.30, "flow": 0.25, "news": 0.0}
 
     for sector_item in research["ranked_sectors"]:
         sector = sector_item["sector"]
@@ -755,14 +876,22 @@ def combine_sector_scores(
         flow_risk_penalty = parse_number(flow_info.get("risk_penalty"), 0.0)
         flow_opportunity_bonus = parse_number(flow_info.get("opportunity_bonus"), 0.0)
 
+        news_info = sector_news_scores.get(sector, {})
+        news_score = parse_number(news_info.get("news_score"), 50.0)
+        news_risk_penalty = parse_number(news_info.get("risk_penalty"), 0.0)
+        news_opportunity_bonus = parse_number(news_info.get("opportunity_bonus"), 0.0)
+
         final_score = (
-            research_score * 0.45
-            + price_score * 0.30
-            + flow_score * 0.25
+            research_score * weights["research"]
+            + price_score * weights["price"]
+            + flow_score * weights["flow"]
+            + news_score * weights["news"]
             + price_opportunity_bonus * 0.12
             + flow_opportunity_bonus * 0.15
+            + news_opportunity_bonus * 0.10
             - price_risk_penalty * 0.15
             - flow_risk_penalty * 0.18
+            - news_risk_penalty * 0.10
         )
 
         final_score = clamp(final_score, 0.0, 100.0)
@@ -775,13 +904,24 @@ def combine_sector_scores(
             "research_score": round(research_score, 2),
             "price_score": round(price_score, 2),
             "flow_score": round(flow_score, 2),
+            "news_score": round(news_score, 2) if has_news_features else None,
+            "news_label": (
+                news_info.get("items", [{}])[0].get("label")
+                if news_info.get("items")
+                else None
+            ),
+            "news_attention_score": round(parse_number(news_info.get("attention_score"), 0.0), 2) if has_news_features else None,
             "price_risk_penalty": round(price_risk_penalty, 2),
             "flow_risk_penalty": round(flow_risk_penalty, 2),
+            "news_risk_penalty": round(news_risk_penalty, 2) if has_news_features else 0.0,
             "price_opportunity_bonus": round(price_opportunity_bonus, 2),
             "flow_opportunity_bonus": round(flow_opportunity_bonus, 2),
+            "news_opportunity_bonus": round(news_opportunity_bonus, 2) if has_news_features else 0.0,
             "final_score": round(final_score, 2),
+            "scoring_weights": weights,
             "price_items": price_info.get("items", []),
             "flow_items": flow_info.get("items", []),
+            "news_items": news_info.get("items", []),
         })
 
     combined.sort(key=lambda x: x["final_score"], reverse=True)
@@ -830,12 +970,15 @@ def make_holding_recommendations(
     research: Dict[str, Any],
     price_features: Dict[str, Any],
     flow_features: Dict[str, Any],
+    news_features: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     recommendations = []
 
     sector_scores = research["sector_scores"]
     price_by_code = price_features.get("features", {})
     flow_by_code = flow_features.get("features", {})
+    news_by_code = (news_features or {}).get("features", {})
+    has_news_features = bool(news_by_code)
     risk_level = research["risk_level"]
 
     for item in account["holdings"]:
@@ -846,12 +989,23 @@ def make_holding_recommendations(
 
         price_result = price_feature_score(price_by_code.get(code))
         flow_result = flow_feature_score(flow_by_code.get(code))
+        news_result = news_feature_score(news_by_code.get(code)) if has_news_features else news_feature_score(None)
 
-        combined_quality = (
-            sector_score * 0.45
-            + price_result["score"] * 0.30
-            + flow_result["score"] * 0.25
-        )
+        if has_news_features:
+            combined_quality = (
+                sector_score * 0.40
+                + price_result["score"] * 0.28
+                + flow_result["score"] * 0.22
+                + news_result["score"] * 0.10
+            )
+        else:
+            combined_quality = (
+                sector_score * 0.45
+                + price_result["score"] * 0.30
+                + flow_result["score"] * 0.25
+            )
+
+        negative_news_count = parse_number((news_result.get("feature") or {}).get("negative_keyword_count_7d"), 0)
 
         action = "hold"
         reason = "보유 유지가 기본입니다. 단, 가격·수급 조건을 함께 보며 추가매수 여부를 판단합니다."
@@ -872,6 +1026,24 @@ def make_holding_recommendations(
             action = "hold_or_gradual_add"
             reason = "리서치·가격·수급 조건이 모두 비교적 양호합니다. 단, 모의투자 단계에서는 소액 분할 접근이 적절합니다."
 
+        if has_news_features and news_result["score"] < 40:
+            action = "hold_no_add"
+            reason = "뉴스 심리가 약해 추가매수는 금지하고 가격·수급 안정 확인이 필요합니다."
+
+        if has_news_features and negative_news_count >= 4:
+            action = "consider_reduce_or_wait"
+            reason = "최근 뉴스의 부정 키워드가 높아 비중 확대보다 관망 또는 축소 검토가 적절합니다."
+
+        if (
+            has_news_features
+            and news_result["score"] >= 65
+            and price_result["score"] >= 55
+            and flow_result["score"] >= 55
+            and combined_quality >= 65
+        ):
+            action = "hold_or_gradual_add"
+            reason = "뉴스·가격·수급 조건이 함께 양호해 보유 유지 또는 소액 분할 확대 후보입니다."
+
         recommendations.append({
             "stock_code": code,
             "stock_name": item["stock_name"],
@@ -879,6 +1051,9 @@ def make_holding_recommendations(
             "sector_score": sector_score,
             "price_score": price_result["score"],
             "flow_score": flow_result["score"],
+            "news_score": news_result["score"] if has_news_features else None,
+            "news_label": news_result["label"] if has_news_features else None,
+            "news_attention_score": parse_number((news_result.get("feature") or {}).get("attention_score"), 0) if has_news_features else None,
             "combined_quality": round(combined_quality, 2),
             "quantity": item["quantity"],
             "evaluation_amount": item["evaluation_amount"],
@@ -889,10 +1064,13 @@ def make_holding_recommendations(
             "reason": reason,
             "price_hint": price_result["action_hint"],
             "flow_hint": flow_result["action_hint"],
+            "news_hint": news_result["action_hint"] if has_news_features else "뉴스 데이터 없음",
             "price_feature": price_result.get("feature"),
             "flow_feature": flow_result.get("feature"),
+            "news_feature": news_result.get("feature") if has_news_features else None,
             "price_reasons": price_result["reasons"],
             "flow_reasons": flow_result["reasons"],
+            "news_reasons": news_result["reasons"] if has_news_features else [],
         })
 
     return recommendations
@@ -942,12 +1120,22 @@ def make_new_position_plan(
         else:
             timing_hint = "후순위 / 신규 진입 보류"
 
+        if item.get("news_score") is not None:
+            news_score = parse_number(item.get("news_score"), 50.0)
+            if news_score < 45:
+                timing_hint += " / 뉴스 흐름 약세로 보수적 접근"
+            elif news_score >= 65:
+                timing_hint += " / 뉴스 흐름 우호"
+
         watchlist.append({
             "sector": sector,
             "label": item["label"],
             "research_score": item["research_score"],
             "price_score": item["price_score"],
             "flow_score": item["flow_score"],
+            "news_score": item.get("news_score"),
+            "news_label": item.get("news_label"),
+            "news_attention_score": item.get("news_attention_score"),
             "final_score": item["final_score"],
             "target_weight": target_weight,
             "candidate_assets": item["candidate_assets"],
@@ -955,6 +1143,7 @@ def make_new_position_plan(
             "timing_hint": timing_hint,
             "price_items": item.get("price_items", []),
             "flow_items": item.get("flow_items", []),
+            "news_items": item.get("news_items", []),
         })
 
     return {
@@ -973,17 +1162,22 @@ def build_recommendation():
     daily_brief = load_text(DAILY_BRIEF_PATH, "")
     price_features = load_price_features()
     flow_features = load_flow_features()
+    news_features = load_news_features()
 
     research = analyze_research(candidates, daily_features)
     account = analyze_account(account_summary)
 
     sector_price_scores = build_sector_price_scores(price_features)
     sector_flow_scores = build_sector_flow_scores(flow_features)
+    sector_news_scores = build_sector_news_scores(news_features)
+    has_news_features = bool(news_features.get("features"))
 
     combined_sectors = combine_sector_scores(
         research=research,
         sector_price_scores=sector_price_scores,
         sector_flow_scores=sector_flow_scores,
+        sector_news_scores=sector_news_scores,
+        has_news_features=has_news_features,
     )
 
     target_allocation = build_target_allocation(
@@ -996,6 +1190,7 @@ def build_recommendation():
         research=research,
         price_features=price_features,
         flow_features=flow_features,
+        news_features=news_features,
     )
 
     new_position_plan = make_new_position_plan(
@@ -1023,6 +1218,9 @@ def build_recommendation():
     if not flow_features.get("features"):
         warnings.append("flow_features.json이 비어 있어 수급 기반 추천 신뢰도가 낮습니다.")
 
+    if not news_features.get("features"):
+        warnings.append("news_event_features.json이 없어 뉴스 기반 추천 보정은 적용하지 않았습니다.")
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "mock_recommendation_only",
@@ -1038,14 +1236,20 @@ def build_recommendation():
             "generated_at": flow_features.get("generated_at"),
             "count": len(flow_features.get("features", {})),
         },
+        "news_features_meta": {
+            "generated_at": news_features.get("generated_at"),
+            "count": len(news_features.get("features", {})),
+            "enabled": has_news_features,
+        },
         "sector_price_scores": sector_price_scores,
         "sector_flow_scores": sector_flow_scores,
+        "sector_news_scores": sector_news_scores,
         "combined_sectors": combined_sectors,
         "target_allocation": target_allocation,
         "holding_recommendations": holding_recommendations,
         "new_position_plan": new_position_plan,
         "warnings": warnings,
-        "next_step": "build_dataset.py로 리서치·가격·수급 피처를 날짜/종목 단위 학습 데이터셋으로 결합합니다.",
+        "next_step": "build_dataset.py로 리서치·가격·수급·뉴스 피처를 날짜/종목 단위 학습 데이터셋으로 결합합니다.",
     }
 
 
@@ -1083,6 +1287,23 @@ def build_flow_feature_line(feature: Optional[Dict[str, Any]]) -> str:
     )
 
 
+def build_news_feature_line(feature: Optional[Dict[str, Any]]) -> str:
+    if not feature:
+        return "뉴스 데이터 없음"
+
+    latest_title = feature.get("latest_news_title") or "최신 뉴스 없음"
+    return (
+        f"뉴스7D {feature.get('news_count_7d')}"
+        f" / 긍정키워드 {feature.get('positive_keyword_count_7d')}"
+        f" / 부정키워드 {feature.get('negative_keyword_count_7d')}"
+        f" / 리스크키워드 {feature.get('risk_keyword_count_7d')}"
+        f" / 뉴스점수 {feature.get('sentiment_score')}"
+        f" / 관심도 {feature.get('attention_score')}"
+        f" / label {feature.get('news_label')}"
+        f" / 최신 뉴스 제목: {latest_title}"
+    )
+
+
 def build_markdown(result: Dict[str, Any]) -> str:
     account = result["account"]
     research = result["research"]
@@ -1097,6 +1318,11 @@ def build_markdown(result: Dict[str, Any]) -> str:
     lines.append("- 실제 주문 실행: 비활성화")
     lines.append(f"- 가격 데이터 기준일: {result['price_features_meta'].get('base_date')}")
     lines.append(f"- 수급 데이터 생성 시각: {result['flow_features_meta'].get('generated_at')}")
+    if result.get("news_features_meta", {}).get("enabled"):
+        lines.append(f"- 뉴스 데이터 생성 시각: {result['news_features_meta'].get('generated_at')}")
+    else:
+        lines.append("- 뉴스 데이터: 없음 / 기존 리서치·가격·수급 비중 유지")
+        lines.append("- 뉴스 점수: N/A / 뉴스 라벨: N/A / 최신 뉴스 제목: N/A")
     lines.append("")
 
     lines.append("## 1. 오늘의 판단 요약")
@@ -1124,6 +1350,10 @@ def build_markdown(result: Dict[str, Any]) -> str:
             lines.append(f"- 리서치 점수: {item['research_score']}")
             lines.append(f"- 가격 점수: {item['price_score']}")
             lines.append(f"- 수급 점수: {item['flow_score']}")
+            if item.get("news_score") is not None:
+                lines.append(f"- 뉴스 점수: {item.get('news_score')}")
+                lines.append(f"- 뉴스 라벨: {item.get('news_label')}")
+                lines.append(f"- 뉴스 관심도: {item.get('news_attention_score')}")
             lines.append(f"- 목표 비중 후보: {item['target_weight'] * 100:.1f}%")
             lines.append(f"- 타이밍 힌트: {item['timing_hint']}")
             lines.append(f"- 이유: {item['reason']}")
@@ -1150,6 +1380,16 @@ def build_markdown(result: Dict[str, Any]) -> str:
                         f"수급점수 {flow_item.get('score')} / {flow_item.get('action_hint')}"
                     )
                     lines.append(f"    - {build_flow_feature_line(flow_item.get('feature'))}")
+
+            if item.get("news_items"):
+                lines.append("- 뉴스 피처 참고:")
+                for news_item in item["news_items"][:3]:
+                    feature = news_item.get("feature") or {}
+                    lines.append(
+                        f"  - {news_item.get('stock_name')}({news_item.get('stock_code')}): "
+                        f"뉴스점수 {news_item.get('score')} / {news_item.get('label')}"
+                    )
+                    lines.append(f"    - {build_news_feature_line(feature)}")
             lines.append("")
     else:
         lines.append("- 오늘 리서치에서 뚜렷한 신규 섹터 후보가 잡히지 않았습니다.")
@@ -1165,20 +1405,26 @@ def build_markdown(result: Dict[str, Any]) -> str:
                 f"/ 섹터점수 {item['sector_score']} "
                 f"/ 가격점수 {item['price_score']} "
                 f"/ 수급점수 {item['flow_score']} "
+                f"/ 뉴스점수 {item.get('news_score') if item.get('news_score') is not None else 'N/A'} "
                 f"/ 종합품질 {item['combined_quality']} "
                 f"/ 액션: {item['action']}"
             )
             lines.append(f"  - 이유: {item['reason']}")
             lines.append(f"  - 가격 힌트: {item['price_hint']}")
             lines.append(f"  - 수급 힌트: {item['flow_hint']}")
+            lines.append(f"  - 뉴스 힌트: {item.get('news_hint', '뉴스 데이터 없음')}")
             if item.get("price_feature"):
                 lines.append(f"  - 가격 피처: {build_price_feature_line(item.get('price_feature'))}")
             if item.get("flow_feature"):
                 lines.append(f"  - 수급 피처: {build_flow_feature_line(item.get('flow_feature'))}")
+            if item.get("news_feature"):
+                lines.append(f"  - 뉴스 피처: {build_news_feature_line(item.get('news_feature'))}")
             if item.get("price_reasons"):
                 lines.append(f"  - 가격 근거: {', '.join(item.get('price_reasons', [])[:6])}")
             if item.get("flow_reasons"):
                 lines.append(f"  - 수급 근거: {', '.join(item.get('flow_reasons', [])[:6])}")
+            if item.get("news_reasons"):
+                lines.append(f"  - 뉴스 근거: {', '.join(item.get('news_reasons', [])[:6])}")
     else:
         lines.append("- 현재 보유 종목이 없거나 파싱된 보유 종목이 없습니다.")
     lines.append("")
@@ -1201,9 +1447,13 @@ def build_markdown(result: Dict[str, Any]) -> str:
     lines.append("")
 
     lines.append("## 6. 점수 산정 메모")
-    lines.append("- 최종 섹터 점수는 리서치 45%, 가격 30%, 수급 25% 비중으로 계산합니다.")
+    if result.get("news_features_meta", {}).get("enabled"):
+        lines.append("- 최종 섹터 점수는 리서치 40%, 가격 28%, 수급 22%, 뉴스 10% 비중으로 계산합니다.")
+    else:
+        lines.append("- 최종 섹터 점수는 리서치 45%, 가격 30%, 수급 25% 비중으로 계산합니다.")
     lines.append("- 가격점수는 5일/20일 수익률, 20일 변동성, 이동평균 괴리율, 낙폭, 거래량 비율을 반영합니다.")
     lines.append("- 수급점수는 외국인/기관 5일·20일 순매수와 동반 순매수/순매도 여부를 반영합니다.")
+    lines.append("- 뉴스점수는 네이버 뉴스 검색 API의 제목/요약 키워드 기반 sentiment와 attention을 반영합니다.")
     lines.append("- 아직 재무, 실적, 밸류에이션, 체결강도, 백테스트 검증은 포함하지 않았습니다.")
     lines.append("")
 
@@ -1214,7 +1464,7 @@ def build_markdown(result: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("## 8. 다음 단계")
     lines.append("- 이 리포트는 주문을 만들지 않습니다.")
-    lines.append("- 다음 개발 단계는 `build_dataset.py`로 리서치·가격·수급 피처를 날짜/종목 단위 학습 데이터셋으로 결합하는 것입니다.")
+    lines.append("- 다음 개발 단계는 `build_dataset.py`로 리서치·가격·수급·뉴스 피처를 날짜/종목 단위 학습 데이터셋으로 결합하는 것입니다.")
     lines.append("- 이후 `train_model.py`에서 XGBoost 또는 룰 기반+모델 혼합 방식으로 신호를 검증합니다.")
 
     return "\n".join(lines)

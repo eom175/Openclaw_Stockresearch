@@ -14,6 +14,8 @@ FLOW_FEATURES_PATH = DATA_DIR / "flow_features.json"
 DART_CORP_CODES_PATH = DATA_DIR / "dart_corp_codes.json"
 DART_DISCLOSURES_PATH = DATA_DIR / "dart_disclosures.json"
 DART_EVENT_FEATURES_PATH = DATA_DIR / "dart_event_features.json"
+NAVER_NEWS_PATH = DATA_DIR / "naver_news.json"
+NEWS_EVENT_FEATURES_PATH = DATA_DIR / "news_event_features.json"
 MODEL_DATASET_JSONL_PATH = DATA_DIR / "model_dataset.jsonl"
 MODEL_DATASET_CSV_PATH = DATA_DIR / "model_dataset.csv"
 
@@ -31,6 +33,8 @@ FLOW_SYNC_DIAGNOSTIC_PATH = REPORTS_DIR / "flow_sync_diagnostic.json"
 FLOW_FEATURES_REPORT_PATH = REPORTS_DIR / "flow_features.md"
 DART_SYNC_DIAGNOSTIC_PATH = REPORTS_DIR / "dart_sync_diagnostic.json"
 DART_DISCLOSURES_REPORT_PATH = REPORTS_DIR / "dart_disclosures.md"
+NAVER_NEWS_SYNC_DIAGNOSTIC_PATH = REPORTS_DIR / "naver_news_sync_diagnostic.json"
+NAVER_NEWS_FEATURES_REPORT_PATH = REPORTS_DIR / "naver_news_features.md"
 FULL_PIPELINE_REPORT_PATH = REPORTS_DIR / "full_pipeline_report.md"
 
 
