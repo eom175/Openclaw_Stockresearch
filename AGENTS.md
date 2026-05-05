@@ -43,6 +43,10 @@
 
 - `scripts/train_model.py`와 `scripts/predict_signals.py`는 주문을 실행하지 않는다.
 - ML 신호는 매수/매도 확정이 아니라 후보 scoring 보조 지표다.
+- ML 모델은 주문 실행자가 아니라 scoring engine이다.
+- `scripts/backtest_signals.py`는 주문을 실행하지 않는다.
+- 모델 성능이 낮거나 데이터가 부족하면 주문 후보를 강화하지 않는다.
+- leakage 의심 피처는 학습에서 제외한다.
 - 모델 파일, 리포트, 로그에 credential, access token, 계좌번호 원문을 저장하지 않는다.
 - labeled row가 부족한 학습 no-op과 모델이 없는 예측 no_model은 정상 상태로 처리한다.
 

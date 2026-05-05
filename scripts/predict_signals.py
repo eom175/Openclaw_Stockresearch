@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +15,7 @@ from policylink.paths import (
     ML_SIGNALS_JSON_PATH,
     ML_SIGNALS_MD_PATH,
     MODEL_DATASET_CSV_PATH,
+    MODEL_REGISTRY_PATH,
     PORTFOLIO_RECOMMENDATION_JSON_PATH,
     XGB_DRAWDOWN_MODEL_PATH,
     XGB_OUTPERFORM_MODEL_PATH,
@@ -37,12 +37,13 @@ def save_json(path, value: Dict[str, Any]) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def no_model_payload(snapshot_date: Optional[str], reason: str) -> Dict[str, Any]:
+def no_model_payload(snapshot_date: Optional[str], reason: str, status: str = "no_model") -> Dict[str, Any]:
     return {
         "generated_at": utc_now(),
         "mode": "ml_signal_generation",
-        "model_status": "no_model",
+        "model_status": status,
         "snapshot_date": snapshot_date,
+        "best_threshold": None,
         "reason": reason,
         "signals": {},
         "order_enabled": False,
@@ -58,6 +59,7 @@ def build_report(payload: Dict[str, Any], top_n: int) -> str:
         "- order_enabled=false",
         f"- model_status: {payload.get('model_status')}",
         f"- snapshot_date: {payload.get('snapshot_date')}",
+        f"- best_threshold: {payload.get('best_threshold')}",
         "",
     ]
 
@@ -89,10 +91,7 @@ def build_report(payload: Dict[str, Any], top_n: int) -> str:
     avoid = [item for item in signals if item.get("signal_label") == "avoid_or_sell_candidate"]
     if avoid:
         for item in avoid[:top_n]:
-            lines.append(
-                f"- {item.get('stock_name')}({item.get('stock_code')}) "
-                f"/ signal={item.get('signal_score')} / pred_return={item.get('predicted_return_5d')}"
-            )
+            lines.append(f"- {item.get('stock_name')}({item.get('stock_code')}) / signal={item.get('signal_score')}")
     else:
         lines.append("- avoid_or_sell_candidate 신호 없음")
 
@@ -118,12 +117,14 @@ def read_dataset():
     return pd.read_csv(MODEL_DATASET_CSV_PATH)
 
 
-def build_matrix(df, numeric_columns: List[str], categorical_columns: List[str], encoded_columns: List[str]):
+def build_matrix(df, numeric_columns: List[str], categorical_columns: List[str], numeric_medians: Dict[str, float], encoded_columns: List[str]):
     import pandas as pd
 
     parts = []
     if numeric_columns:
-        numeric = df.reindex(columns=numeric_columns).apply(pd.to_numeric, errors="coerce").fillna(0.0)
+        numeric = df.reindex(columns=numeric_columns).apply(pd.to_numeric, errors="coerce")
+        for column in numeric_columns:
+            numeric[column] = numeric[column].fillna(numeric_medians.get(column, 0.0))
         parts.append(numeric)
     if categorical_columns:
         categorical = df.reindex(columns=categorical_columns).fillna("missing").astype(str)
@@ -145,11 +146,9 @@ def return_score(value: Optional[float]) -> float:
 
 
 def drawdown_penalty(value: Optional[float]) -> float:
-    if value is None:
+    if value is None or value >= 0:
         return 0.0
-    if value >= 0:
-        return 0.0
-    return min(20.0, abs(float(value)) * 300.0)
+    return min(10.0, abs(float(value)) * 250.0)
 
 
 def label_for_score(score: float) -> str:
@@ -162,18 +161,30 @@ def label_for_score(score: float) -> str:
     return "avoid_or_sell_candidate"
 
 
+def maybe_downgrade_label(label: str, probability: float, best_threshold: float, use_best_threshold: bool) -> str:
+    if not use_best_threshold:
+        return label
+    if label in {"strong_buy_candidate", "buy_candidate"} and probability < best_threshold:
+        return "watch"
+    return label
+
+
 def predict(args: argparse.Namespace) -> Dict[str, Any]:
     df = read_dataset()
     if df.empty:
         return no_model_payload(args.snapshot_date, "data/model_dataset.csv가 없거나 비어 있습니다.")
 
     if "snapshot_date" not in df.columns:
-        return no_model_payload(args.snapshot_date, "snapshot_date 컬럼이 없습니다.")
+        return no_model_payload(args.snapshot_date, "snapshot_date 컬럼이 없습니다.", status="insufficient_features")
 
     snapshot_date = args.snapshot_date or str(df["snapshot_date"].max())
     target = df.loc[df["snapshot_date"].astype(str) == str(snapshot_date)].copy()
     if target.empty:
-        return no_model_payload(str(snapshot_date), "해당 snapshot_date row가 없습니다.")
+        return no_model_payload(str(snapshot_date), "해당 snapshot_date row가 없습니다.", status="insufficient_features")
+
+    registry = load_json(MODEL_REGISTRY_PATH, {})
+    if registry.get("model_status") != "trained":
+        return no_model_payload(str(snapshot_date), "model_registry.json이 없거나 trained 상태가 아닙니다.")
 
     required_paths = [FEATURE_COLUMNS_PATH, XGB_OUTPERFORM_MODEL_PATH, XGB_RETURN_MODEL_PATH]
     missing = [str(path) for path in required_paths if not path.exists()]
@@ -183,20 +194,19 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
     feature_meta = load_json(FEATURE_COLUMNS_PATH, {})
     numeric_columns = feature_meta.get("numeric_columns", [])
     categorical_columns = feature_meta.get("categorical_columns", [])
+    numeric_medians = feature_meta.get("numeric_medians", {})
     encoded_columns = feature_meta.get("encoded_columns", [])
     if not encoded_columns:
-        return no_model_payload(str(snapshot_date), "feature_columns.json에 encoded_columns가 없습니다.")
+        return no_model_payload(str(snapshot_date), "feature_columns.json에 encoded_columns가 없습니다.", status="insufficient_features")
 
     try:
         from xgboost import XGBClassifier, XGBRegressor
     except Exception as exc:
         return no_model_payload(str(snapshot_date), f"xgboost import 실패: {exc}")
 
-    X = build_matrix(target, numeric_columns, categorical_columns, encoded_columns)
+    X = build_matrix(target, numeric_columns, categorical_columns, numeric_medians, encoded_columns)
     if X.empty:
-        payload = no_model_payload(str(snapshot_date), "예측 feature matrix가 비어 있습니다.")
-        payload["model_status"] = "insufficient_features"
-        return payload
+        return no_model_payload(str(snapshot_date), "예측 feature matrix가 비어 있습니다.", status="insufficient_features")
 
     classifier = XGBClassifier()
     classifier.load_model(XGB_OUTPERFORM_MODEL_PATH)
@@ -214,9 +224,11 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
         predicted_drawdown = list(drawdown_model.predict(X))
 
     portfolio = load_json(PORTFOLIO_RECOMMENDATION_JSON_PATH, {})
-    model_version = str(feature_meta.get("trained_at") or "xgb_unknown")
+    best_threshold = parse_number(registry.get("best_threshold"), 0.60)
+    model_version = str(registry.get("active_model_version") or feature_meta.get("active_model_version") or "xgb_unknown")
     signals = {}
 
+    duplicate_warning = len(set(target.get("stock_code", []))) != len(target)
     for idx, (_, row) in enumerate(target.iterrows()):
         code = normalize_code(row.get("stock_code"))
         if not code:
@@ -226,17 +238,18 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
         pred_dd = None if predicted_drawdown[idx] is None else float(predicted_drawdown[idx])
         rule_final_score = parse_number(row.get("final_score"), 0.0)
         signal_score = (
-            prob * 50.0
+            prob * 45.0
             + return_score(pred_ret)
-            + clamp(rule_final_score, 0.0, 100.0) / 100.0 * 25.0
+            + clamp(rule_final_score, 0.0, 100.0) / 100.0 * 20.0
             - drawdown_penalty(pred_dd)
         )
         signal_score = round(clamp(signal_score), 2)
+        label = maybe_downgrade_label(label_for_score(signal_score), prob, best_threshold, args.use_best_threshold)
 
         warnings = []
         if pred_dd is not None and pred_dd < -0.04:
             warnings.append("predicted_drawdown_5d below -4%")
-        if len(set(target.get("stock_code", []))) != len(target):
+        if duplicate_warning:
             warnings.append("snapshot contains duplicate stock rows")
 
         signals[code] = {
@@ -248,7 +261,7 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
             "predicted_drawdown_5d": None if pred_dd is None else round(pred_dd, 6),
             "rule_final_score": round(rule_final_score, 4),
             "signal_score": signal_score,
-            "signal_label": label_for_score(signal_score),
+            "signal_label": label,
             "model_version": model_version,
             "feature_warning": warnings,
         }
@@ -258,6 +271,7 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
         "mode": "ml_signal_generation",
         "model_status": "available",
         "snapshot_date": str(snapshot_date),
+        "best_threshold": best_threshold,
         "signals": signals,
         "portfolio_generated_at": portfolio.get("generated_at"),
         "order_enabled": False,
@@ -268,11 +282,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate today's ML signals from trained XGBoost models.")
     parser.add_argument("--snapshot-date")
     parser.add_argument("--top-n", type=int, default=10)
+    parser.add_argument("--use-best-threshold", default="true")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    args.use_best_threshold = str(args.use_best_threshold).lower() not in {"false", "0", "no"}
     payload = predict(args)
     write_payload(payload, args.top_n)
     print(f"Saved ML signals json: {ML_SIGNALS_JSON_PATH}")

@@ -261,6 +261,20 @@
     ]
   },
   {
+    "name": "Dataset - Audit",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/audit_dataset.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--min-rows", "50",
+      "--min-labeled-rows", "30",
+      "--min-dates", "5"
+    ]
+  },
+  {
     "name": "ML - Predict Signals",
     "type": "debugpy",
     "request": "launch",
@@ -268,6 +282,21 @@
     "console": "integratedTerminal",
     "cwd": "${workspaceFolder}",
     "python": "${workspaceFolder}/.venv/bin/python"
+  },
+  {
+    "name": "ML - Backtest Signals",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/backtest_signals.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--score-column", "final_score",
+      "--target-column", "future_return_5d",
+      "--top-k", "3",
+      "--min-labeled-rows", "30"
+    ]
   },
     {
     "name": "Prices - Sync Daily",

@@ -141,7 +141,7 @@ def yahoo_sector_risk_off(sector: str, yahoo_features: Dict[str, Any]) -> bool:
 
 def load_inputs(allow_ml_signals: bool) -> Dict[str, Any]:
     ml_signals = load_json(ML_SIGNALS_PATH, {"signals": {}})
-    if not isinstance(ml_signals, dict) or ml_signals.get("model_status") == "no_model":
+    if not isinstance(ml_signals, dict) or ml_signals.get("model_status") != "available":
         ml_signals = {"signals": {}}
 
     return {
@@ -357,8 +357,12 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
 
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= 0.60:
                 reasons.append("ML outperform_prob_5d 우호")
+            if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= parse_number(inputs["ml_signals"].get("best_threshold"), 0.60):
+                reasons.append("ML best_threshold 이상")
             if ml_signal and parse_number(ml_signal.get("predicted_return_5d"), 0.0) > 0:
                 reasons.append("ML predicted_return_5d 양수")
+            if ml_signal and str(ml_signal.get("signal_label") or "") == "strong_buy_candidate":
+                reasons.append("ML strong_buy_candidate")
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 1.0) < 0.40:
                 warnings.append("ML outperform_prob_5d 약세")
             if ml_signal and str(ml_signal.get("signal_label") or "") == "avoid_or_sell_candidate":
