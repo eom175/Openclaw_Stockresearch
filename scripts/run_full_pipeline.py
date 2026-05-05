@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from dataclasses import field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -32,6 +33,7 @@ class PipelineStep:
     name: str
     argv: List[str]
     warning_only: bool = False
+    warning_markers: List[str] = field(default_factory=list)
 
 
 def redact_text(text: str, limit: int = 4000) -> str:
@@ -62,19 +64,33 @@ def run_step(step: PipelineStep) -> dict:
     )
     duration = time.time() - started
 
+    stdout_text = completed.stdout or ""
+    stderr_text = completed.stderr or ""
+    marker_warning = completed.returncode == 0 and any(
+        marker.lower() in stdout_text.lower()
+        for marker in step.warning_markers
+    )
+
+    if completed.returncode == 0 and marker_warning:
+        status = "warning"
+    elif completed.returncode == 0:
+        status = "success"
+    else:
+        status = "warning" if step.warning_only else "failed"
+
     result = {
         "name": step.name,
         "command": command_label(step.argv),
         "return_code": completed.returncode,
         "duration_seconds": round(duration, 1),
-        "status": "success" if completed.returncode == 0 else ("warning" if step.warning_only else "failed"),
+        "status": status,
         "stdout_tail": "",
         "stderr_tail": "",
     }
 
-    if completed.returncode != 0:
-        result["stdout_tail"] = redact_text(completed.stdout)
-        result["stderr_tail"] = redact_text(completed.stderr)
+    if completed.returncode != 0 or marker_warning:
+        result["stdout_tail"] = redact_text(stdout_text)
+        result["stderr_tail"] = redact_text(stderr_text)
 
     return result
 
@@ -126,9 +142,11 @@ def main() -> int:
         PipelineStep("Prices - Sync Daily", [python, str(script_dir / "sync_prices.py"), "--max-stocks", "10", "--sleep", "0.7"]),
         PipelineStep("Flows - Sync Investor Flows", [python, str(script_dir / "sync_flows.py"), "--max-stocks", "5", "--sleep", "1.2"]),
         PipelineStep("Portfolio - Recommend", [python, str(script_dir / "recommend_portfolio.py")]),
-        PipelineStep("Orders - Generate Proposals", [python, str(script_dir / "generate_order_proposals.py"), "--max-buy-candidates", "3", "--max-sell-candidates", "3", "--max-order-amount", "1000000"]),
         PipelineStep("Dataset - Build Snapshot", [python, str(script_dir / "build_dataset.py")]),
         PipelineStep("Dataset - Label Future Returns", [python, str(script_dir / "label_dataset.py")]),
+        PipelineStep("ML - Train Models", [python, str(script_dir / "train_model.py"), "--min-labeled-rows", "100", "--min-dates", "10"], warning_markers=["training_status=no_op"]),
+        PipelineStep("ML - Predict Signals", [python, str(script_dir / "predict_signals.py")], warning_markers=["model_status=no_model", "model_status=insufficient_features"]),
+        PipelineStep("Orders - Generate Proposals", [python, str(script_dir / "generate_order_proposals.py"), "--max-buy-candidates", "3", "--max-sell-candidates", "3", "--max-order-amount", "1000000"]),
     ]
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)

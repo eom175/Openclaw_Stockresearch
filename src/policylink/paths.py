@@ -5,6 +5,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 RAW_DIR = PROJECT_ROOT / "raw"
+MODELS_DIR = PROJECT_ROOT / "models"
 
 CANDIDATES_PATH = DATA_DIR / "candidates.compact.json"
 PRICES_DAILY_PATH = DATA_DIR / "prices_daily.json"
@@ -46,9 +47,22 @@ NAVER_NEWS_FEATURES_REPORT_PATH = REPORTS_DIR / "naver_news_features.md"
 YAHOO_FINANCE_SYNC_DIAGNOSTIC_PATH = REPORTS_DIR / "yahoo_finance_sync_diagnostic.json"
 YAHOO_GLOBAL_FEATURES_REPORT_PATH = REPORTS_DIR / "yahoo_global_features.md"
 FULL_PIPELINE_REPORT_PATH = REPORTS_DIR / "full_pipeline_report.md"
+MODEL_TRAINING_REPORT_PATH = REPORTS_DIR / "model_training_report.md"
+MODEL_TRAINING_METRICS_PATH = REPORTS_DIR / "model_training_metrics.json"
+ML_SIGNALS_JSON_PATH = REPORTS_DIR / "ml_signals.json"
+ML_SIGNALS_MD_PATH = REPORTS_DIR / "ml_signals.md"
+
+XGB_OUTPERFORM_MODEL_PATH = MODELS_DIR / "xgb_outperform_5d.json"
+XGB_RETURN_MODEL_PATH = MODELS_DIR / "xgb_return_5d.json"
+XGB_DRAWDOWN_MODEL_PATH = MODELS_DIR / "xgb_drawdown_5d.json"
+XGB_OUTPERFORM_METADATA_PATH = MODELS_DIR / "xgb_outperform_5d_metadata.json"
+XGB_RETURN_METADATA_PATH = MODELS_DIR / "xgb_return_5d_metadata.json"
+XGB_DRAWDOWN_METADATA_PATH = MODELS_DIR / "xgb_drawdown_5d_metadata.json"
+FEATURE_COLUMNS_PATH = MODELS_DIR / "feature_columns.json"
 
 
 def ensure_project_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     RAW_DIR.mkdir(parents=True, exist_ok=True)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)

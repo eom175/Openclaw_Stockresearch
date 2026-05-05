@@ -1,3 +1,6 @@
 feedparser==6.0.12
 pandas
 yfinance
+xgboost
+scikit-learn
+joblib

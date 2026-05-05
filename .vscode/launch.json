@@ -246,6 +246,29 @@
       "--min-flow-score", "55"
     ]
   },
+  {
+    "name": "ML - Train Models",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/train_model.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--min-labeled-rows", "100",
+      "--min-dates", "10",
+      "--n-splits", "3"
+    ]
+  },
+  {
+    "name": "ML - Predict Signals",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/predict_signals.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python"
+  },
     {
     "name": "Prices - Sync Daily",
     "type": "debugpy",

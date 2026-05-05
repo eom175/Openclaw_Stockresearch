@@ -31,11 +31,13 @@ cd /Users/eomjiyong/policy-research
 6. `sync_prices.py --max-stocks 10 --sleep 0.7`
 7. `sync_flows.py --max-stocks 5 --sleep 1.2`
 8. `recommend_portfolio.py`
-9. `generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000`
-10. `build_dataset.py`
-11. `label_dataset.py`
+9. `build_dataset.py`
+10. `label_dataset.py`
+11. `train_model.py --min-labeled-rows 100 --min-dates 10`
+12. `predict_signals.py`
+13. `generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000`
 
-주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. 주문 후보 생성 단계도 `proposal_only=true`, `order_enabled=false`이며 키움 주문 API를 호출하지 않는다. DART/뉴스/Yahoo 수집 실패는 warning으로 기록하고 가격/수급/추천 파이프라인은 계속 진행한다.
+주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. 주문 후보 생성 단계도 `proposal_only=true`, `order_enabled=false`이며 키움 주문 API를 호출하지 않는다. DART/뉴스/Yahoo 수집 실패, ML 학습 no-op, ML 예측 no_model은 warning으로 기록하고 파이프라인은 계속 진행한다.
 
 ## OpenClaw Cron 예시
 
@@ -74,6 +76,10 @@ Telegram 요약에는 `reports/portfolio_recommendation.md`, `reports/model_data
 - `data/order_ledger.jsonl`
 - `data/model_dataset.jsonl`
 - `data/model_dataset.csv`
+- `reports/model_training_report.md`
+- `reports/model_training_metrics.json`
+- `reports/ml_signals.json`
+- `reports/ml_signals.md`
 - `reports/label_dataset_report.md`
 - `reports/full_pipeline_report.md`
 
@@ -158,6 +164,44 @@ VS Code에서는 `Yahoo - Collect Global Features` launch 메뉴를 사용한다
 - `reports/yahoo_global_features.md`
 
 Yahoo Finance/yfinance 데이터는 공식 제휴 API가 아니므로 내부 연구/교육 목적 compact feature로만 사용한다. 기사 원문 전체는 저장하지 않고 제목, 요약, URL, 발행시각, 관련 ticker와 proxy별 점수만 저장한다.
+
+## ML 학습과 예측 신호
+
+XGBoost 기반 ML 신호를 사용하려면 `xgboost`, `scikit-learn`, `pandas`, `numpy`, `joblib`이 필요하다.
+
+```bash
+cd /Users/eomjiyong/policy-research
+/Users/eomjiyong/policy-research/.venv/bin/pip install xgboost scikit-learn pandas numpy joblib
+```
+
+학습 실행:
+
+```bash
+cd /Users/eomjiyong/policy-research
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/train_model.py --min-labeled-rows 100 --min-dates 10 --n-splits 3
+```
+
+예측 실행:
+
+```bash
+cd /Users/eomjiyong/policy-research
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/predict_signals.py
+```
+
+VS Code에서는 `ML - Train Models`, `ML - Predict Signals` launch 메뉴를 사용한다.
+
+생성 파일:
+
+- `models/xgb_outperform_5d.json`
+- `models/xgb_return_5d.json`
+- `models/xgb_drawdown_5d.json`, 가능할 때만
+- `models/feature_columns.json`
+- `reports/model_training_report.md`
+- `reports/model_training_metrics.json`
+- `reports/ml_signals.json`
+- `reports/ml_signals.md`
+
+labeled row와 snapshot_date가 충분하지 않으면 `train_model.py`는 실패하지 않고 “학습 보류” no-op 리포트를 만든다. 모델 파일이 없으면 `predict_signals.py`도 실패하지 않고 `no_model` 상태의 ML 신호 리포트를 만든다. XGBoost 모델은 주문 후보 생성의 보조 점수로만 사용하며, 매수/매도 확정이나 주문 실행 기능이 아니다.
 
 ## 주문 후보 생성
 

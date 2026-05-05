@@ -19,4 +19,8 @@ reports/*access*
 !data/.gitkeep
 !reports/.gitkeep
 
+models/*.json
+models/*.joblib
+!models/.gitkeep
+
 .DS_Store

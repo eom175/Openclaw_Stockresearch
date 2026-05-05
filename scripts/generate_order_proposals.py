@@ -140,6 +140,10 @@ def yahoo_sector_risk_off(sector: str, yahoo_features: Dict[str, Any]) -> bool:
 
 
 def load_inputs(allow_ml_signals: bool) -> Dict[str, Any]:
+    ml_signals = load_json(ML_SIGNALS_PATH, {"signals": {}})
+    if not isinstance(ml_signals, dict) or ml_signals.get("model_status") == "no_model":
+        ml_signals = {"signals": {}}
+
     return {
         "portfolio": load_json(PORTFOLIO_RECOMMENDATION_JSON_PATH, {}),
         "account_summary": load_json(KIWOOM_ACCOUNT_SUMMARY_PATH, {}),
@@ -149,7 +153,7 @@ def load_inputs(allow_ml_signals: bool) -> Dict[str, Any]:
         "news_features": normalize_feature_map(load_json(NEWS_EVENT_FEATURES_PATH, {"features": {}})),
         "yahoo_features": load_json(YAHOO_GLOBAL_FEATURES_PATH, {"sector_global_scores": {}, "features": {}}),
         "model_rows": load_model_dataset_latest(),
-        "ml_signals": load_json(ML_SIGNALS_PATH, {"signals": {}}) if allow_ml_signals else {"signals": {}},
+        "ml_signals": ml_signals,
     }
 
 
@@ -195,6 +199,9 @@ def should_exclude_buy(
 
     if ml_signal and parse_number(ml_signal.get("predicted_drawdown_5d"), 0.0) < -0.04:
         reasons.append("ML predicted_drawdown_5d risk")
+
+    if ml_signal and str(ml_signal.get("signal_label") or "") == "avoid_or_sell_candidate":
+        reasons.append("ML signal_label=avoid_or_sell_candidate")
 
     return reasons
 
@@ -350,8 +357,12 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
 
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= 0.60:
                 reasons.append("ML outperform_prob_5d 우호")
+            if ml_signal and parse_number(ml_signal.get("predicted_return_5d"), 0.0) > 0:
+                reasons.append("ML predicted_return_5d 양수")
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 1.0) < 0.40:
                 warnings.append("ML outperform_prob_5d 약세")
+            if ml_signal and str(ml_signal.get("signal_label") or "") == "avoid_or_sell_candidate":
+                warnings.append("ML avoid_or_sell_candidate")
 
             proposal = build_proposal(
                 proposal_id=make_proposal_id(snapshot_date=today_yyyymmdd(), sequence=seq),
