@@ -147,6 +147,15 @@
       "python": "${workspaceFolder}/.venv/bin/python"
     },
     {
+      "name": "ML - Check Dependencies",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/check_ml_dependencies.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python"
+    },
+    {
       "name": "ML - Train Historical",
       "type": "debugpy",
       "request": "launch",
@@ -156,13 +165,13 @@
       "python": "${workspaceFolder}/.venv/bin/python",
       "args": [
         "--use-historical",
-        "--min-labeled-rows", "500",
-        "--min-dates", "60",
+        "--min-labeled-rows", "100",
+        "--min-dates", "10",
         "--n-splits", "3"
       ]
     },
     {
-      "name": "ML - Backtest Historical",
+      "name": "ML - Backtest Historical Rule",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/scripts/backtest_signals.py",
@@ -174,7 +183,26 @@
         "--score-column", "final_score",
         "--target-column", "future_return_5d",
         "--top-k", "3",
-        "--min-labeled-rows", "100"
+        "--min-labeled-rows", "100",
+        "--fee-bps", "15",
+        "--slippage-bps", "10"
+      ]
+    },
+    {
+      "name": "ML - Backtest Historical ML Walk Forward",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/backtest_signals.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--use-historical",
+        "--ml-walk-forward",
+        "--top-k", "3",
+        "--min-labeled-rows", "100",
+        "--fee-bps", "15",
+        "--slippage-bps", "10"
       ]
     },
     {
@@ -359,13 +387,15 @@
     "console": "integratedTerminal",
     "cwd": "${workspaceFolder}",
     "python": "${workspaceFolder}/.venv/bin/python",
-    "args": [
-      "--score-column", "final_score",
-      "--target-column", "future_return_5d",
-      "--top-k", "3",
-      "--min-labeled-rows", "30"
-    ]
-  },
+      "args": [
+        "--score-column", "final_score",
+        "--target-column", "future_return_5d",
+        "--top-k", "3",
+        "--min-labeled-rows", "30",
+        "--fee-bps", "15",
+        "--slippage-bps", "10"
+      ]
+    },
   {
     "name": "ML - Experiment Models",
     "type": "debugpy",

@@ -52,6 +52,10 @@
 - leakage 의심 피처는 학습에서 제외한다.
 - 모델 실험에서 leakage 의심 피처가 있으면 active model 승격을 금지한다.
 - 모델 성능이 기준 미달이면 active model로 승격하지 않는다.
+- dependency 진단과 설치 가이드는 가능하지만 `.env` 또는 credential을 읽거나 출력하지 않는다.
+- ML walk-forward 백테스트는 모델 검증용이며 주문 실행과 무관하다.
+- 백테스트 결과가 좋아도 자동주문을 켜지 않는다.
+- 주문 실행은 별도 승인형 단계에서만 다룬다.
 - 모델 파일, 리포트, 로그에 credential, access token, 계좌번호 원문을 저장하지 않는다.
 - labeled row가 부족한 학습 no-op과 모델이 없는 예측 no_model은 정상 상태로 처리한다.
 

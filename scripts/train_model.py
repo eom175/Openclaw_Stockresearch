@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 from datetime import datetime, timezone
@@ -63,6 +64,15 @@ FEATURE_GROUPS = {
     "research": ["research_", "risk_score", "opportunity_score", "macro_pressure_score"],
     "account": ["account_", "holding_", "pending_or_reserved", "is_holding"],
 }
+
+ML_DEPENDENCIES = [
+    {"name": "pandas", "module": "pandas", "required": True},
+    {"name": "numpy", "module": "numpy", "required": True},
+    {"name": "scikit-learn", "module": "sklearn", "required": True},
+    {"name": "xgboost", "module": "xgboost", "required": True},
+    {"name": "joblib", "module": "joblib", "required": True},
+    {"name": "shap", "module": "shap", "required": False},
+]
 
 
 def utc_now() -> str:
@@ -491,13 +501,63 @@ def ablation_summary(args, labeled, numeric_columns: List[str], categorical_colu
     return result
 
 
+def ml_dependency_check() -> Dict[str, Any]:
+    details = []
+    missing_required = []
+    optional_missing = []
+    system_install_suggestions = []
+    install_command = ".venv/bin/pip install pandas numpy scikit-learn xgboost joblib shap"
+
+    for dependency in ML_DEPENDENCIES:
+        name = dependency["name"]
+        module_name = dependency["module"]
+        required = bool(dependency["required"])
+        item = {
+            "name": name,
+            "module": module_name,
+            "required": required,
+            "available": False,
+            "version": None,
+            "error": None,
+        }
+        try:
+            module = importlib.import_module(module_name)
+            item["available"] = True
+            item["version"] = str(getattr(module, "__version__", "unknown"))
+        except Exception as exc:
+            message = str(exc).strip() or exc.__class__.__name__
+            first_line = message.splitlines()[0]
+            item["error"] = first_line[:500]
+            if required:
+                missing_required.append(name)
+            else:
+                optional_missing.append(name)
+            if name == "xgboost" and ("libomp" in message.lower() or "openmp" in message.lower()):
+                system_install_suggestions.append("brew install libomp")
+        details.append(item)
+
+    return {
+        "ok": not missing_required,
+        "missing_dependencies": missing_required,
+        "optional_missing_dependencies": optional_missing,
+        "dependency_details": details,
+        "install_command": install_command,
+        "system_install_suggestions": sorted(set(system_install_suggestions)),
+    }
+
+
 def xgboost_unavailable_reason() -> Optional[str]:
-    try:
-        import xgboost  # noqa: F401
+    check = ml_dependency_check()
+    if check.get("ok"):
         return None
-    except Exception as exc:
-        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
-        return f"XGBoost runtime을 사용할 수 없습니다: {first_line}"
+    missing = ", ".join(check.get("missing_dependencies") or [])
+    details = [
+        item.get("error")
+        for item in check.get("dependency_details", [])
+        if item.get("required") and not item.get("available") and item.get("error")
+    ]
+    detail = f" ({details[0]})" if details else ""
+    return f"ML dependency를 사용할 수 없습니다: {missing}{detail}"
 
 
 def save_model_metadata(path, model_name: str, metrics: Dict[str, Any], row_count: int, date_range: Dict[str, Any]) -> None:
@@ -552,8 +612,16 @@ def registry_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
     return registry
 
 
-def no_op_result(status: str, reason: str, row_count: int = 0, labeled_rows: int = 0, date_count: int = 0) -> Dict[str, Any]:
+def no_op_result(
+    status: str,
+    reason: str,
+    row_count: int = 0,
+    labeled_rows: int = 0,
+    date_count: int = 0,
+    dependency_check: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     now = utc_now()
+    dependency_check = dependency_check or {}
     return {
         "generated_at": now,
         "mode": "xgboost_training",
@@ -571,6 +639,11 @@ def no_op_result(status: str, reason: str, row_count: int = 0, labeled_rows: int
         "metrics": {},
         "feature_importance_top30": {},
         "ablation": {"skipped": True, "reason": reason},
+        "missing_dependencies": dependency_check.get("missing_dependencies", []),
+        "optional_missing_dependencies": dependency_check.get("optional_missing_dependencies", []),
+        "dependency_details": dependency_check.get("dependency_details", []),
+        "install_command": dependency_check.get("install_command"),
+        "system_install_suggestions": dependency_check.get("system_install_suggestions", []),
         "order_enabled": False,
     }
 
@@ -595,6 +668,22 @@ def build_training_report(result: Dict[str, Any]) -> str:
             f"- 학습 가능 labeled row 수: {result.get('labeled_rows', 0)}",
             f"- 학습 가능 snapshot_date 수: {result.get('date_count', 0)}",
         ])
+        if result.get("missing_dependencies"):
+            lines.append(f"- missing_dependencies: {result.get('missing_dependencies')}")
+            lines.append(f"- install_command: {result.get('install_command')}")
+        if result.get("optional_missing_dependencies"):
+            lines.append(f"- optional_missing_dependencies: {result.get('optional_missing_dependencies')}")
+        if result.get("system_install_suggestions"):
+            lines.append(f"- system_install_suggestions: {result.get('system_install_suggestions')}")
+        unavailable = [
+            item for item in result.get("dependency_details", [])
+            if not item.get("available")
+        ]
+        if unavailable:
+            lines.append("")
+            lines.append("## Dependency Details")
+            for item in unavailable:
+                lines.append(f"- {item.get('name')}: {item.get('error')}")
         return "\n".join(lines)
 
     lines.extend([
@@ -727,9 +816,17 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
         result["dataset_path"] = str(dataset_path)
         return result
 
-    dependency_reason = xgboost_unavailable_reason()
-    if dependency_reason:
-        result = no_op_result("no_op_dependency_unavailable", dependency_reason, len(df), labeled_rows, date_count)
+    dependency_check = ml_dependency_check()
+    if not dependency_check.get("ok"):
+        dependency_reason = xgboost_unavailable_reason() or "ML dependency를 사용할 수 없습니다."
+        result = no_op_result(
+            "no_op_dependency_unavailable",
+            dependency_reason,
+            len(df),
+            labeled_rows,
+            date_count,
+            dependency_check=dependency_check,
+        )
         result["dataset_path"] = str(dataset_path)
         return result
 
@@ -836,6 +933,9 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
         "feature_importance_top30": importances,
         "ablation": ablation,
         "feature_columns_path": str(FEATURE_COLUMNS_PATH),
+        "missing_dependencies": [],
+        "optional_missing_dependencies": dependency_check.get("optional_missing_dependencies", []),
+        "dependency_details": dependency_check.get("dependency_details", []),
         "order_enabled": False,
     }
 

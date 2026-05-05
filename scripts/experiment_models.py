@@ -16,6 +16,7 @@ from train_model import (
     build_matrix,
     finite_float,
     labeled_frame,
+    ml_dependency_check,
     walk_forward_splits,
     xgboost_unavailable_reason,
 )
@@ -94,7 +95,15 @@ def read_dataset(path: Path):
     return pd.read_csv(path)
 
 
-def no_op(reason: str, dataset: Path, row_count: int = 0, labeled_rows: int = 0, date_count: int = 0) -> Dict[str, Any]:
+def no_op(
+    reason: str,
+    dataset: Path,
+    row_count: int = 0,
+    labeled_rows: int = 0,
+    date_count: int = 0,
+    dependency_check: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    dependency_check = dependency_check or {}
     return {
         "generated_at": utc_now(),
         "mode": "model_experiment",
@@ -107,6 +116,11 @@ def no_op(reason: str, dataset: Path, row_count: int = 0, labeled_rows: int = 0,
         "experiments": [],
         "best_experiment": None,
         "reason": reason,
+        "missing_dependencies": dependency_check.get("missing_dependencies", []),
+        "optional_missing_dependencies": dependency_check.get("optional_missing_dependencies", []),
+        "dependency_details": dependency_check.get("dependency_details", []),
+        "install_command": dependency_check.get("install_command"),
+        "system_install_suggestions": dependency_check.get("system_install_suggestions", []),
         "order_enabled": False,
     }
 
@@ -222,7 +236,9 @@ def ranking_metrics(validation_rows, prob_column: str = "outperform_prob", top_k
     if validation_rows.empty:
         return result
     all_returns = pd.to_numeric(validation_rows["future_return_5d"], errors="coerce")
+    cost_return = 25.0 / 10000.0
     result["all_mean_future_return_5d"] = finite_float(all_returns.mean())
+    result["all_mean_net_return_5d"] = finite_float(all_returns.mean() - cost_return)
     for k in [1, 3, 5]:
         selected = []
         for _, group in validation_rows.groupby("snapshot_date"):
@@ -233,11 +249,14 @@ def ranking_metrics(validation_rows, prob_column: str = "outperform_prob", top_k
         top_returns = pd.to_numeric(top["future_return_5d"], errors="coerce")
         result[f"precision_at_{k}"] = finite_float(pd.to_numeric(top["future_outperform_5d"], errors="coerce").mean())
         result[f"top{k}_mean_future_return_5d"] = finite_float(top_returns.mean())
+        result[f"top{k}_mean_net_return_5d"] = finite_float(top_returns.mean() - cost_return)
         result[f"top{k}_hit_rate"] = finite_float((top_returns > 0).mean())
         if "future_max_drawdown_5d" in top.columns:
             result[f"top{k}_avg_future_max_drawdown_5d"] = finite_float(pd.to_numeric(top["future_max_drawdown_5d"], errors="coerce").mean())
     if result.get(f"top{top_k}_mean_future_return_5d") is not None and result.get("all_mean_future_return_5d") is not None:
         result[f"excess_return_top{top_k}_vs_all"] = finite_float(result[f"top{top_k}_mean_future_return_5d"] - result["all_mean_future_return_5d"])
+    if result.get(f"top{top_k}_mean_net_return_5d") is not None and result.get("all_mean_net_return_5d") is not None:
+        result[f"excess_net_return_top{top_k}_vs_all"] = finite_float(result[f"top{top_k}_mean_net_return_5d"] - result["all_mean_net_return_5d"])
     return result
 
 
@@ -400,6 +419,16 @@ def run_experiments(args: argparse.Namespace) -> Dict[str, Any]:
     ensure_project_dirs()
     path = dataset_path(args)
     df = read_dataset(path)
+    dependency = ml_dependency_check()
+    if not dependency.get("ok"):
+        return no_op(
+            "ML dependency를 사용할 수 없어 모델 실험을 보류합니다.",
+            path,
+            len(df),
+            0,
+            0,
+            dependency_check=dependency,
+        )
     labeled = labeled_frame(df)
     labeled_rows = int(len(labeled))
     date_count = int(labeled["snapshot_date"].nunique()) if not labeled.empty else 0
@@ -457,17 +486,22 @@ def build_report(result: Dict[str, Any]) -> str:
     if result.get("experiment_status") == "no_op":
         lines.append("## No-op")
         lines.append(f"- reason: {result.get('reason')}")
+        if result.get("missing_dependencies"):
+            lines.append(f"- missing_dependencies: {result.get('missing_dependencies')}")
+            lines.append(f"- install_command: {result.get('install_command')}")
+        if result.get("system_install_suggestions"):
+            lines.append(f"- system_install_suggestions: {result.get('system_install_suggestions')}")
         return "\n".join(lines)
 
     lines.append("## Feature Set / Model Results")
-    lines.append("| feature_set | model | status | precision_at_3 | top3_return | roc_auc | best_threshold | notes |")
+    lines.append("| feature_set | model | status | precision_at_3 | top3_net_return | roc_auc | best_threshold | notes |")
     lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: | --- |")
     for item in result.get("experiments", []):
         metrics = item.get("metrics_mean", {})
         notes = "; ".join(item.get("notes", [])[:2])
         lines.append(
             f"| {item.get('feature_set')} | {item.get('model_name')} | {item.get('status')} | "
-            f"{metrics.get('precision_at_3')} | {metrics.get('top3_mean_future_return_5d')} | "
+            f"{metrics.get('precision_at_3')} | {metrics.get('top3_mean_net_return_5d')} | "
             f"{metrics.get('roc_auc')} | {item.get('best_threshold')} | {notes} |"
         )
     lines.extend(["", "## Best Experiment"])
