@@ -149,6 +149,8 @@ def main() -> int:
         PipelineStep("ML - Predict Signals", [python, str(script_dir / "predict_signals.py")], warning_markers=["model_status=no_model", "model_status=insufficient_features"]),
         PipelineStep("ML - Backtest Signals", [python, str(script_dir / "backtest_signals.py")], warning_markers=["backtest_status=no_op"]),
         PipelineStep("Orders - Generate Proposals", [python, str(script_dir / "generate_order_proposals.py"), "--max-buy-candidates", "3", "--max-sell-candidates", "3", "--max-order-amount", "1000000"]),
+        PipelineStep("Paper - Log Trades", [python, str(script_dir / "log_paper_trades.py"), "--max-candidates", "5", "--only-approved-for-review"], warning_markers=["new_records=0"]),
+        PipelineStep("Paper - Evaluate Trades", [python, str(script_dir / "evaluate_paper_trades.py"), "--horizon-days", "5"], warning_markers=["evaluation_status=no_op_insufficient_labeled_paper_trades"]),
     ]
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)

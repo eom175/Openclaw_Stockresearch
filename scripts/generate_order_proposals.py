@@ -369,12 +369,12 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
 
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= 0.60:
                 reasons.append("ML outperform_prob_5d >= 0.60 보조 긍정 근거")
-                if ml_signal.get("model_source") != "active" or not ml_signal.get("calibrated"):
+                if ml_signal.get("model_source") != "active_calibrated" or not ml_signal.get("calibrated"):
                     warnings.append("ML 긍정 신호는 단독 매수 근거가 아니며 rule-first modifier로만 사용")
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= parse_number(ml_signal.get("threshold_used") or inputs["ml_signals"].get("best_threshold"), 0.60):
-                if ml_signal.get("model_source") == "active" and ml_signal.get("calibrated"):
+                if ml_signal.get("model_source") == "active_calibrated" and ml_signal.get("calibrated"):
                     reasons.append("calibrated active ML threshold 이상")
-                elif ml_signal.get("model_source") == "active":
+                elif str(ml_signal.get("model_source") or "").startswith("active"):
                     reasons.append("active ML threshold 이상")
                 else:
                     warnings.append("fallback ML threshold 이상이나 낮은 가중치로 참고")

@@ -38,8 +38,10 @@ cd /Users/eomjiyong/policy-research
 13. `predict_signals.py`
 14. `backtest_signals.py`
 15. `generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000`
+16. `log_paper_trades.py --max-candidates 5 --only-approved-for-review`
+17. `evaluate_paper_trades.py --horizon-days 5`
 
-주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. 주문 후보 생성 단계도 `proposal_only=true`, `order_enabled=false`이며 키움 주문 API를 호출하지 않는다. DART/뉴스/Yahoo 수집 실패, ML 학습 no-op, ML 예측 no_model은 warning으로 기록하고 파이프라인은 계속 진행한다.
+주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. 주문 후보 생성과 paper trading 단계도 `proposal_only=true`, `paper_only`, `order_enabled=false`이며 키움 주문 API를 호출하지 않는다. DART/뉴스/Yahoo 수집 실패, ML 학습 no-op, ML 예측 no_model, paper trade 라벨 부족은 warning으로 기록하고 파이프라인은 계속 진행한다.
 
 ## OpenClaw Cron 예시
 
@@ -373,6 +375,46 @@ Signal policy 평가:
 - calibration 완료
 - drawdown 기준 통과
 - paper-trading 2주 이상 통과
+
+## Calibration과 Paper Trading Evaluation
+
+현재 신호 정책은 `rule_first_ml_modifier`이며 ML은 primary signal이 아니다. ML 확률은 calibration 전에는 과신하지 않고, fallback 또는 uncalibrated 모델이면 `strong_buy_candidate`를 제한하고 `probability_warning`을 남긴다.
+
+Calibration 실행:
+
+```bash
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/calibrate_model.py --use-historical --method sigmoid --min-labeled-rows 300 --min-dates 30 --n-bins 10
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/predict_signals.py
+```
+
+Calibration은 historical labeled data를 시간순으로 train/calibration/test로 나누고, 보정 전후의 `log_loss`, `brier_score`, `roc_auc`, `average_precision`, `precision_at_3`, `top3_mean_future_return_5d`를 비교한다. 개선될 때만 `models/active/calibrated_outperform_5d.joblib`을 저장한다.
+
+Paper trading은 실제 주문 없이 후보를 추적하는 단계다.
+
+```bash
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/log_paper_trades.py --max-candidates 5 --only-approved-for-review
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/evaluate_paper_trades.py --horizon-days 5 --fee-bps 15 --slippage-bps 10
+```
+
+생성 파일:
+
+- `data/paper_trades.jsonl`
+- `reports/paper_trades_snapshot.md`
+- `reports/paper_trading_report.json`
+- `reports/paper_trading_report.md`
+
+승인형 모의주문으로 넘어가기 전 최소 조건:
+
+- selected_rows >= 100
+- validation date_count >= 30
+- calibration improved 또는 ML weight <= 0.25
+- paper trades labeled >= 30
+- mean_net_return_5d > 0
+- hit_rate_5d >= 0.55
+- avg_max_drawdown_5d > -0.05
+
+이 조건을 만족해도 자동매매는 바로 켜지지 않는다. 다음 단계는 별도 승인형 모의주문이며, 현재 daily pipeline은 paper trade logging/evaluation까지만 수행한다.
 
 ## 주문 후보 생성
 

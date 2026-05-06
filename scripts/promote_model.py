@@ -23,6 +23,7 @@ from policylink.paths import (
     HISTORICAL_DATASET_AUDIT_JSON_PATH,
     MODEL_PROMOTION_REPORT_PATH,
     MODEL_REGISTRY_PATH,
+    PAPER_TRADING_REPORT_JSON_PATH,
     SIGNAL_POLICY_JSON_PATH,
     ensure_project_dirs,
 )
@@ -55,6 +56,7 @@ def promotion_decision(
     backtest: Dict[str, Any],
     signal_policy: Dict[str, Any],
     calibration: Dict[str, Any],
+    paper_trading: Dict[str, Any],
 ) -> Dict[str, Any]:
     reasons = []
     if not best:
@@ -63,9 +65,9 @@ def promotion_decision(
     ml = backtest.get("ml_walk_forward_metrics") or {}
     same_rule = ml.get("same_window_rule_metrics") or {}
     ensemble = ml.get("same_window_ensemble_metrics") or {}
-    calibration_status = str(calibration.get("calibration_status") or "")
-    calibration_available = calibration_status in {"completed", "available", "calibrated"} or bool(calibration.get("saved_model_path"))
+    calibration_improved = calibration.get("improved") is True
     ml_weight = float(signal_policy.get("ml_weight", 0.25) or 0.25)
+    paper_metrics = paper_trading.get("metrics") if isinstance(paper_trading.get("metrics"), dict) else {}
 
     if best and best.get("status") != "completed":
         reasons.append("best experiment status가 completed가 아닙니다.")
@@ -95,10 +97,22 @@ def promotion_decision(
     ensemble_drawdown = ensemble.get("top_k_avg_drawdown")
     if ensemble_drawdown is not None and ensemble_drawdown < args.max_drawdown_top3:
         reasons.append(f"ensemble top_k_avg_drawdown {ensemble_drawdown} < {args.max_drawdown_top3}")
-    if not calibration_available and ml_weight > 0.25:
-        reasons.append("calibration_missing 상태에서 ML weight가 0.25를 초과합니다.")
+    if not calibration_improved and ml_weight > 0.25:
+        reasons.append("calibration이 개선되지 않은 상태에서 ML weight가 0.25를 초과합니다.")
     if signal_policy.get("promotion_blockers"):
-        reasons.extend([f"signal_policy blocker: {item}" for item in signal_policy.get("promotion_blockers", [])])
+        for item in signal_policy.get("promotion_blockers", []):
+            if item == "calibration_missing" and calibration_improved:
+                continue
+            reasons.append(f"signal_policy blocker: {item}")
+    if (paper_metrics.get("labeled_trades") or 0) < 30:
+        reasons.append(f"paper_trading labeled_trades {paper_metrics.get('labeled_trades')} < 30")
+    if (paper_metrics.get("mean_net_return_5d") or 0.0) <= 0:
+        reasons.append(f"paper_trading mean_net_return_5d {paper_metrics.get('mean_net_return_5d')} <= 0")
+    if (paper_metrics.get("hit_rate_5d") or 0.0) < 0.55:
+        reasons.append(f"paper_trading hit_rate_5d {paper_metrics.get('hit_rate_5d')} < 0.55")
+    drawdown = paper_metrics.get("avg_max_drawdown_5d")
+    if drawdown is None or drawdown <= -0.05:
+        reasons.append(f"paper_trading avg_max_drawdown_5d {drawdown} <= -0.05")
     return {"promoted": not reasons, "reasons": reasons}
 
 
@@ -147,8 +161,9 @@ def promote(args: argparse.Namespace) -> Dict[str, Any]:
     audit = load_json(HISTORICAL_DATASET_AUDIT_JSON_PATH, {})
     backtest = load_json(BACKTEST_METRICS_PATH, {})
     signal_policy = load_json(SIGNAL_POLICY_JSON_PATH, {})
+    paper_trading = load_json(PAPER_TRADING_REPORT_JSON_PATH, {})
     best = find_best_experiment(results)
-    decision = promotion_decision(best, args, audit, backtest, signal_policy, calibration)
+    decision = promotion_decision(best, args, audit, backtest, signal_policy, calibration, paper_trading)
     copied: Dict[str, str] = {}
     promoted = bool(decision["promoted"])
     if promoted and not args.dry_run:
@@ -171,6 +186,7 @@ def promote(args: argparse.Namespace) -> Dict[str, Any]:
             "ensemble": ((backtest.get("ml_walk_forward_metrics") or {}).get("same_window_ensemble_metrics") or {}),
         },
         "recommended_signal_policy": signal_policy,
+        "paper_trading_metrics": paper_trading.get("metrics", {}),
         "reasons": decision["reasons"],
         "active_paths": copied,
         "criteria": {
@@ -178,6 +194,10 @@ def promote(args: argparse.Namespace) -> Dict[str, Any]:
             "min_top3_mean_return": args.min_top3_mean_return,
             "max_drawdown_top3": args.max_drawdown_top3,
             "require_positive_excess_return": args.require_positive_excess_return,
+            "min_paper_labeled_trades": 30,
+            "min_paper_hit_rate_5d": 0.55,
+            "min_paper_mean_net_return_5d": 0.0,
+            "min_paper_avg_max_drawdown_5d": -0.05,
         },
         "order_enabled": False,
     }
@@ -226,6 +246,7 @@ def build_report(result: Dict[str, Any]) -> str:
             f"{item.get('top_k_avg_drawdown')} | {item.get('stability_score')} |"
         )
     policy = result.get("recommended_signal_policy") or {}
+    paper = result.get("paper_trading_metrics") or {}
     lines.extend([
         "",
         "## Recommended Signal Policy",
@@ -233,6 +254,12 @@ def build_report(result: Dict[str, Any]) -> str:
         f"- primary_signal: {policy.get('primary_signal')}",
         f"- rule_weight: {policy.get('rule_weight')}",
         f"- ml_weight: {policy.get('ml_weight')}",
+        "",
+        "## Paper Trading Metrics",
+        f"- labeled_trades: {paper.get('labeled_trades')}",
+        f"- mean_net_return_5d: {paper.get('mean_net_return_5d')}",
+        f"- hit_rate_5d: {paper.get('hit_rate_5d')}",
+        f"- avg_max_drawdown_5d: {paper.get('avg_max_drawdown_5d')}",
         "",
         "## Next",
         "- 승격된 active model이 있어도 risk_guard 없이 주문 후보를 강화하지 않습니다.",

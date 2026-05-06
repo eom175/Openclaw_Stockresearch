@@ -422,7 +422,9 @@
     "args": [
       "--use-historical",
       "--method", "sigmoid",
-      "--min-labeled-rows", "300"
+      "--min-labeled-rows", "300",
+      "--min-dates", "30",
+      "--n-bins", "10"
     ]
   },
   {
@@ -470,6 +472,33 @@
     "console": "integratedTerminal",
     "cwd": "${workspaceFolder}",
     "python": "${workspaceFolder}/.venv/bin/python"
+  },
+  {
+    "name": "Paper - Log Trades",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/log_paper_trades.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--max-candidates", "5",
+      "--only-approved-for-review"
+    ]
+  },
+  {
+    "name": "Paper - Evaluate Trades",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/evaluate_paper_trades.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python",
+    "args": [
+      "--horizon-days", "5",
+      "--fee-bps", "15",
+      "--slippage-bps", "10"
+    ]
   },
     {
     "name": "Prices - Sync Daily",

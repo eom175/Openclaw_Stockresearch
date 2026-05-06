@@ -50,6 +50,7 @@ def no_model_payload(snapshot_date: Optional[str], reason: str, status: str = "n
         "model_status": status,
         "model_source": "no_model",
         "calibrated": False,
+        "calibration_status": None,
         "snapshot_date": snapshot_date,
         "best_threshold": None,
         "threshold_used": None,
@@ -63,6 +64,7 @@ def no_model_payload(snapshot_date: Optional[str], reason: str, status: str = "n
             "auto_order_allowed": False,
         },
         "warning": ["no_model"],
+        "probability_warning": ["no_model"],
         "reason": reason,
         "signals": {},
         "order_enabled": False,
@@ -79,9 +81,11 @@ def build_report(payload: Dict[str, Any], top_n: int) -> str:
         f"- model_status: {payload.get('model_status')}",
         f"- model_source: {payload.get('model_source')}",
         f"- calibrated: {payload.get('calibrated')}",
+        f"- calibration_status: {payload.get('calibration_status')}",
         f"- snapshot_date: {payload.get('snapshot_date')}",
         f"- best_threshold: {payload.get('best_threshold')}",
         f"- signal_policy: {(payload.get('signal_policy') or {}).get('recommended_policy')}",
+        f"- probability_warning: {payload.get('probability_warning')}",
         "",
     ]
 
@@ -141,10 +145,13 @@ def read_dataset():
 
 
 def resolve_model_context(registry: Dict[str, Any]) -> Dict[str, Any]:
-    if ACTIVE_CALIBRATED_OUTPERFORM_MODEL_PATH.exists() and ACTIVE_FEATURE_COLUMNS_PATH.exists():
+    calibration = registry.get("calibration") if isinstance(registry.get("calibration"), dict) else {}
+    calibration_improved = calibration.get("improved") is True
+    if calibration_improved and ACTIVE_CALIBRATED_OUTPERFORM_MODEL_PATH.exists() and ACTIVE_FEATURE_COLUMNS_PATH.exists():
         return {
-            "model_source": "active",
+            "model_source": "active_calibrated",
             "calibrated": True,
+            "calibration_status": calibration.get("status"),
             "classifier_path": ACTIVE_CALIBRATED_OUTPERFORM_MODEL_PATH,
             "return_model_path": ACTIVE_XGB_RETURN_MODEL_PATH if ACTIVE_XGB_RETURN_MODEL_PATH.exists() else XGB_RETURN_MODEL_PATH,
             "drawdown_model_path": ACTIVE_XGB_DRAWDOWN_MODEL_PATH if ACTIVE_XGB_DRAWDOWN_MODEL_PATH.exists() else XGB_DRAWDOWN_MODEL_PATH,
@@ -153,8 +160,9 @@ def resolve_model_context(registry: Dict[str, Any]) -> Dict[str, Any]:
         }
     if ACTIVE_XGB_OUTPERFORM_MODEL_PATH.exists() and ACTIVE_FEATURE_COLUMNS_PATH.exists():
         return {
-            "model_source": "active",
+            "model_source": "active_uncalibrated",
             "calibrated": False,
+            "calibration_status": calibration.get("status"),
             "classifier_path": ACTIVE_XGB_OUTPERFORM_MODEL_PATH,
             "return_model_path": ACTIVE_XGB_RETURN_MODEL_PATH if ACTIVE_XGB_RETURN_MODEL_PATH.exists() else XGB_RETURN_MODEL_PATH,
             "drawdown_model_path": ACTIVE_XGB_DRAWDOWN_MODEL_PATH if ACTIVE_XGB_DRAWDOWN_MODEL_PATH.exists() else XGB_DRAWDOWN_MODEL_PATH,
@@ -163,8 +171,9 @@ def resolve_model_context(registry: Dict[str, Any]) -> Dict[str, Any]:
         }
     if ACTIVE_CLASSIFIER_JOBLIB_PATH.exists() and ACTIVE_FEATURE_COLUMNS_PATH.exists():
         return {
-            "model_source": "active",
+            "model_source": "active_uncalibrated",
             "calibrated": False,
+            "calibration_status": calibration.get("status"),
             "classifier_path": ACTIVE_CLASSIFIER_JOBLIB_PATH,
             "return_model_path": ACTIVE_XGB_RETURN_MODEL_PATH if ACTIVE_XGB_RETURN_MODEL_PATH.exists() else XGB_RETURN_MODEL_PATH,
             "drawdown_model_path": ACTIVE_XGB_DRAWDOWN_MODEL_PATH if ACTIVE_XGB_DRAWDOWN_MODEL_PATH.exists() else XGB_DRAWDOWN_MODEL_PATH,
@@ -173,8 +182,9 @@ def resolve_model_context(registry: Dict[str, Any]) -> Dict[str, Any]:
         }
     if XGB_OUTPERFORM_MODEL_PATH.exists() and FEATURE_COLUMNS_PATH.exists():
         return {
-            "model_source": "fallback",
+            "model_source": "fallback_uncalibrated",
             "calibrated": False,
+            "calibration_status": calibration.get("status"),
             "classifier_path": XGB_OUTPERFORM_MODEL_PATH,
             "return_model_path": XGB_RETURN_MODEL_PATH,
             "drawdown_model_path": XGB_DRAWDOWN_MODEL_PATH,
@@ -259,7 +269,7 @@ def maybe_downgrade_label(label: str, probability: float, best_threshold: float,
 
 
 def cautious_label(label: str, model_source: str, calibrated: bool) -> str:
-    if model_source == "fallback" or not calibrated:
+    if model_source in {"fallback", "fallback_uncalibrated"} or not calibrated:
         if label == "strong_buy_candidate":
             return "buy_candidate"
     return label
@@ -341,10 +351,11 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
         label = cautious_label(label, str(model_context.get("model_source") or ""), bool(model_context.get("calibrated")))
 
         warnings = []
-        if model_context.get("model_source") == "fallback":
+        if model_context.get("model_source") in {"fallback", "fallback_uncalibrated"}:
             warnings.append("fallback_model")
         if not model_context.get("calibrated"):
             warnings.append("calibration_missing")
+            warnings.append("uncalibrated_probability")
         if "ml_selected_rows_too_small" in (signal_policy.get("promotion_blockers") or []):
             warnings.append("small_validation_sample")
         if pred_dd is not None and pred_dd < -0.04:
@@ -358,6 +369,7 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
             "sector": row.get("sector"),
             "model_source": model_context.get("model_source"),
             "calibrated": bool(model_context.get("calibrated")),
+            "calibration_status": model_context.get("calibration_status"),
             "threshold_used": best_threshold,
             "selected_threshold": best_threshold,
             "signal_policy": signal_policy,
@@ -371,6 +383,10 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
             "model_version": model_version,
             "feature_warning": warnings,
             "warning": warnings,
+            "probability_warning": [
+                warning for warning in warnings
+                if warning in {"uncalibrated_probability", "calibration_missing", "fallback_model"}
+            ],
             "feature_group_warnings": [],
         }
 
@@ -380,6 +396,7 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
         "model_status": "available",
         "model_source": model_context.get("model_source"),
         "calibrated": bool(model_context.get("calibrated")),
+        "calibration_status": model_context.get("calibration_status"),
         "snapshot_date": str(snapshot_date),
         "best_threshold": best_threshold,
         "threshold_used": best_threshold,
@@ -390,6 +407,11 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
             warning
             for item in signals.values()
             for warning in item.get("warning", [])
+        }),
+        "probability_warning": sorted({
+            warning
+            for item in signals.values()
+            for warning in item.get("probability_warning", [])
         }),
         "signals": signals,
         "portfolio_generated_at": portfolio.get("generated_at"),
