@@ -53,7 +53,16 @@ def no_model_payload(snapshot_date: Optional[str], reason: str, status: str = "n
         "snapshot_date": snapshot_date,
         "best_threshold": None,
         "threshold_used": None,
+        "selected_threshold": None,
         "experiment_id": None,
+        "signal_policy": {
+            "primary_signal": "rule",
+            "recommended_policy": "rule_first_ml_modifier",
+            "rule_weight": 0.75,
+            "ml_weight": 0.25,
+            "auto_order_allowed": False,
+        },
+        "warning": ["no_model"],
         "reason": reason,
         "signals": {},
         "order_enabled": False,
@@ -72,6 +81,7 @@ def build_report(payload: Dict[str, Any], top_n: int) -> str:
         f"- calibrated: {payload.get('calibrated')}",
         f"- snapshot_date: {payload.get('snapshot_date')}",
         f"- best_threshold: {payload.get('best_threshold')}",
+        f"- signal_policy: {(payload.get('signal_policy') or {}).get('recommended_policy')}",
         "",
     ]
 
@@ -111,6 +121,7 @@ def build_report(payload: Dict[str, Any], top_n: int) -> str:
         "",
         "## 주의사항",
         "- ML 신호는 매수/매도 확정이 아니라 후보 scoring 보조 지표입니다.",
+        "- fallback 또는 calibration 미완료 모델의 확률은 보수적으로 해석합니다.",
         "- 이 스크립트는 주문 API를 호출하지 않습니다.",
     ])
     return "\n".join(lines)
@@ -247,6 +258,13 @@ def maybe_downgrade_label(label: str, probability: float, best_threshold: float,
     return label
 
 
+def cautious_label(label: str, model_source: str, calibrated: bool) -> str:
+    if model_source == "fallback" or not calibrated:
+        if label == "strong_buy_candidate":
+            return "buy_candidate"
+    return label
+
+
 def predict(args: argparse.Namespace) -> Dict[str, Any]:
     df = read_dataset()
     if df.empty:
@@ -261,6 +279,13 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
         return no_model_payload(str(snapshot_date), "해당 snapshot_date row가 없습니다.", status="insufficient_features")
 
     registry = load_json(MODEL_REGISTRY_PATH, {})
+    signal_policy = registry.get("signal_policy") if isinstance(registry.get("signal_policy"), dict) else {
+        "primary_signal": "rule",
+        "recommended_policy": "rule_first_ml_modifier",
+        "rule_weight": 0.75,
+        "ml_weight": 0.25,
+        "auto_order_allowed": False,
+    }
     model_context = resolve_model_context(registry)
     if not model_context:
         return no_model_payload(str(snapshot_date), "active/fallback 모델 파일이 없습니다.")
@@ -313,8 +338,15 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
         )
         signal_score = round(clamp(signal_score), 2)
         label = maybe_downgrade_label(label_for_score(signal_score), prob, best_threshold, args.use_best_threshold)
+        label = cautious_label(label, str(model_context.get("model_source") or ""), bool(model_context.get("calibrated")))
 
         warnings = []
+        if model_context.get("model_source") == "fallback":
+            warnings.append("fallback_model")
+        if not model_context.get("calibrated"):
+            warnings.append("calibration_missing")
+        if "ml_selected_rows_too_small" in (signal_policy.get("promotion_blockers") or []):
+            warnings.append("small_validation_sample")
         if pred_dd is not None and pred_dd < -0.04:
             warnings.append("predicted_drawdown_5d below -4%")
         if duplicate_warning:
@@ -327,6 +359,8 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
             "model_source": model_context.get("model_source"),
             "calibrated": bool(model_context.get("calibrated")),
             "threshold_used": best_threshold,
+            "selected_threshold": best_threshold,
+            "signal_policy": signal_policy,
             "experiment_id": model_context.get("experiment_id"),
             "outperform_prob_5d": round(prob, 6),
             "predicted_return_5d": round(pred_ret, 6),
@@ -336,6 +370,7 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
             "signal_label": label,
             "model_version": model_version,
             "feature_warning": warnings,
+            "warning": warnings,
             "feature_group_warnings": [],
         }
 
@@ -348,7 +383,14 @@ def predict(args: argparse.Namespace) -> Dict[str, Any]:
         "snapshot_date": str(snapshot_date),
         "best_threshold": best_threshold,
         "threshold_used": best_threshold,
+        "selected_threshold": best_threshold,
         "experiment_id": model_context.get("experiment_id"),
+        "signal_policy": signal_policy,
+        "warning": sorted({
+            warning
+            for item in signals.values()
+            for warning in item.get("warning", [])
+        }),
         "signals": signals,
         "portfolio_generated_at": portfolio.get("generated_at"),
         "order_enabled": False,

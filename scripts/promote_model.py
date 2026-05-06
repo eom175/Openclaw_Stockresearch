@@ -17,11 +17,13 @@ from policylink.paths import (
     ACTIVE_CLASSIFIER_JOBLIB_PATH,
     ACTIVE_MODELS_DIR,
     ACTIVE_XGB_OUTPERFORM_MODEL_PATH,
+    BACKTEST_METRICS_PATH,
     CALIBRATION_REPORT_JSON_PATH,
     EXPERIMENT_RESULTS_PATH,
     HISTORICAL_DATASET_AUDIT_JSON_PATH,
     MODEL_PROMOTION_REPORT_PATH,
     MODEL_REGISTRY_PATH,
+    SIGNAL_POLICY_JSON_PATH,
     ensure_project_dirs,
 )
 from policylink.utils import load_json
@@ -46,26 +48,57 @@ def find_best_experiment(results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def promotion_decision(best: Optional[Dict[str, Any]], args: argparse.Namespace, audit: Dict[str, Any]) -> Dict[str, Any]:
-    if not best:
-        return {"promoted": False, "reasons": ["best experiment가 없습니다."]}
+def promotion_decision(
+    best: Optional[Dict[str, Any]],
+    args: argparse.Namespace,
+    audit: Dict[str, Any],
+    backtest: Dict[str, Any],
+    signal_policy: Dict[str, Any],
+    calibration: Dict[str, Any],
+) -> Dict[str, Any]:
     reasons = []
-    metrics = best.get("metrics_mean") or {}
-    if best.get("status") != "completed":
+    if not best:
+        reasons.append("best experiment가 없습니다.")
+    metrics = (best or {}).get("metrics_mean") or {}
+    ml = backtest.get("ml_walk_forward_metrics") or {}
+    same_rule = ml.get("same_window_rule_metrics") or {}
+    ensemble = ml.get("same_window_ensemble_metrics") or {}
+    calibration_status = str(calibration.get("calibration_status") or "")
+    calibration_available = calibration_status in {"completed", "available", "calibrated"} or bool(calibration.get("saved_model_path"))
+    ml_weight = float(signal_policy.get("ml_weight", 0.25) or 0.25)
+
+    if best and best.get("status") != "completed":
         reasons.append("best experiment status가 completed가 아닙니다.")
-    if (metrics.get("precision_at_3") or 0.0) < args.min_precision_at_3:
+    if best and (metrics.get("precision_at_3") or 0.0) < args.min_precision_at_3:
         reasons.append(f"precision_at_3 {metrics.get('precision_at_3')} < {args.min_precision_at_3}")
-    if (metrics.get("top3_mean_future_return_5d") or 0.0) <= args.min_top3_mean_return:
+    if best and (metrics.get("top3_mean_future_return_5d") or 0.0) <= args.min_top3_mean_return:
         reasons.append(f"top3_mean_future_return_5d {metrics.get('top3_mean_future_return_5d')} <= {args.min_top3_mean_return}")
-    if args.require_positive_excess_return and (metrics.get("excess_return_top3_vs_all") or 0.0) <= 0:
+    if best and args.require_positive_excess_return and (metrics.get("excess_return_top3_vs_all") or 0.0) <= 0:
         reasons.append(f"excess_return_top3_vs_all {metrics.get('excess_return_top3_vs_all')} <= 0")
     drawdown = metrics.get("top3_avg_future_max_drawdown_5d")
-    if drawdown is not None and drawdown < args.max_drawdown_top3:
+    if best and drawdown is not None and drawdown < args.max_drawdown_top3:
         reasons.append(f"top3_avg_future_max_drawdown_5d {drawdown} < {args.max_drawdown_top3}")
-    if (metrics.get("fold_count") or 0) < 3:
+    if best and (metrics.get("fold_count") or 0) < 3:
         reasons.append(f"fold_count {metrics.get('fold_count')} < 3")
     if audit.get("audit_status") == "BLOCK_TRAINING" and audit.get("leakage_candidate_columns"):
         reasons.append("historical dataset audit가 leakage 의심 컬럼으로 BLOCK_TRAINING 상태입니다.")
+    if (ensemble.get("excess_net_return") or 0.0) <= (same_rule.get("excess_net_return") or 0.0):
+        reasons.append("same-window ensemble excess_net_return이 rule excess_net_return보다 높지 않습니다.")
+    if (ensemble.get("top_k_hit_rate") or 0.0) < (same_rule.get("top_k_hit_rate") or 0.0):
+        reasons.append("same-window ensemble top_k_hit_rate가 rule보다 낮습니다.")
+    if (ensemble.get("selected_rows") or 0) < 100:
+        reasons.append(f"ensemble selected_rows {ensemble.get('selected_rows')} < 100")
+    if (ensemble.get("date_count") or 0) < 30:
+        reasons.append(f"ensemble validation date_count {ensemble.get('date_count')} < 30")
+    if (ensemble.get("stability_score") or 0.0) <= 0:
+        reasons.append(f"ensemble stability_score {ensemble.get('stability_score')} <= 0")
+    ensemble_drawdown = ensemble.get("top_k_avg_drawdown")
+    if ensemble_drawdown is not None and ensemble_drawdown < args.max_drawdown_top3:
+        reasons.append(f"ensemble top_k_avg_drawdown {ensemble_drawdown} < {args.max_drawdown_top3}")
+    if not calibration_available and ml_weight > 0.25:
+        reasons.append("calibration_missing 상태에서 ML weight가 0.25를 초과합니다.")
+    if signal_policy.get("promotion_blockers"):
+        reasons.extend([f"signal_policy blocker: {item}" for item in signal_policy.get("promotion_blockers", [])])
     return {"promoted": not reasons, "reasons": reasons}
 
 
@@ -112,8 +145,10 @@ def promote(args: argparse.Namespace) -> Dict[str, Any]:
     results = load_json(EXPERIMENT_RESULTS_PATH, {})
     calibration = load_json(CALIBRATION_REPORT_JSON_PATH, {})
     audit = load_json(HISTORICAL_DATASET_AUDIT_JSON_PATH, {})
+    backtest = load_json(BACKTEST_METRICS_PATH, {})
+    signal_policy = load_json(SIGNAL_POLICY_JSON_PATH, {})
     best = find_best_experiment(results)
-    decision = promotion_decision(best, args, audit)
+    decision = promotion_decision(best, args, audit, backtest, signal_policy, calibration)
     copied: Dict[str, str] = {}
     promoted = bool(decision["promoted"])
     if promoted and not args.dry_run:
@@ -123,9 +158,19 @@ def promote(args: argparse.Namespace) -> Dict[str, Any]:
         "generated_at": utc_now(),
         "mode": "model_promotion",
         "dry_run": bool(args.dry_run),
-        "promotion_status": "promoted" if promoted and not args.dry_run else ("would_promote" if promoted else "rejected"),
+        "promotion_status": (
+            "promoted"
+            if promoted and not args.dry_run
+            else ("would_promote" if promoted else ("dry_run_rejected" if args.dry_run else "rejected"))
+        ),
         "promoted": promoted and not args.dry_run,
         "best_experiment": best,
+        "same_window_metrics": {
+            "rule": ((backtest.get("ml_walk_forward_metrics") or {}).get("same_window_rule_metrics") or {}),
+            "ml": backtest.get("ml_walk_forward_metrics") or {},
+            "ensemble": ((backtest.get("ml_walk_forward_metrics") or {}).get("same_window_ensemble_metrics") or {}),
+        },
+        "recommended_signal_policy": signal_policy,
         "reasons": decision["reasons"],
         "active_paths": copied,
         "criteria": {
@@ -157,6 +202,7 @@ def build_report(result: Dict[str, Any]) -> str:
     else:
         lines.append("- 기준 충족")
     best = result.get("best_experiment") or {}
+    same_window = result.get("same_window_metrics") or {}
     lines.extend(["", "## Best Experiment Metrics"])
     if best:
         lines.append(f"- experiment_id: {best.get('experiment_id')}")
@@ -166,7 +212,31 @@ def build_report(result: Dict[str, Any]) -> str:
                 lines.append(f"- {key}: {value}")
     else:
         lines.append("- best experiment 없음")
-    lines.extend(["", "## Next", "- 승격된 active model이 있어도 risk_guard 없이 주문 후보를 강화하지 않습니다."])
+    lines.extend([
+        "",
+        "## Same-window Metrics Comparison",
+        "| signal | selected_rows | date_count | excess_net | hit_rate | drawdown | stability |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    for label in ["rule", "ml", "ensemble"]:
+        item = same_window.get(label) or {}
+        lines.append(
+            f"| {label} | {item.get('selected_rows')} | {item.get('date_count')} | "
+            f"{item.get('excess_net_return')} | {item.get('top_k_hit_rate')} | "
+            f"{item.get('top_k_avg_drawdown')} | {item.get('stability_score')} |"
+        )
+    policy = result.get("recommended_signal_policy") or {}
+    lines.extend([
+        "",
+        "## Recommended Signal Policy",
+        f"- recommended_policy: {policy.get('recommended_policy')}",
+        f"- primary_signal: {policy.get('primary_signal')}",
+        f"- rule_weight: {policy.get('rule_weight')}",
+        f"- ml_weight: {policy.get('ml_weight')}",
+        "",
+        "## Next",
+        "- 승격된 active model이 있어도 risk_guard 없이 주문 후보를 강화하지 않습니다.",
+    ])
     return "\n".join(lines)
 
 

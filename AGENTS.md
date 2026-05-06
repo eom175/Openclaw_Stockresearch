@@ -56,6 +56,10 @@
 - ML walk-forward 백테스트는 모델 검증용이며 주문 실행과 무관하다.
 - 백테스트 결과가 좋아도 자동주문을 켜지 않는다.
 - 주문 실행은 별도 승인형 단계에서만 다룬다.
+- ML 신호가 생성되어도 자동주문을 실행하지 않는다.
+- `signal_policy`가 `auto_order_allowed=false`이면 주문 후보만 생성한다.
+- model promotion이 rejected 또는 dry-run rejected이면 ML을 primary signal로 쓰지 않는다.
+- `calibrated=false`인 확률은 투자 판단에 과신하지 않는다.
 - 모델 파일, 리포트, 로그에 credential, access token, 계좌번호 원문을 저장하지 않는다.
 - labeled row가 부족한 학습 no-op과 모델이 없는 예측 no_model은 정상 상태로 처리한다.
 

@@ -454,6 +454,15 @@
     ]
   },
   {
+    "name": "ML - Evaluate Signal Policy",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/scripts/evaluate_signal_policy.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/bin/python"
+  },
+  {
     "name": "ML - Research Pipeline",
     "type": "debugpy",
     "request": "launch",

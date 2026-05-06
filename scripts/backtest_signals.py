@@ -136,6 +136,46 @@ def predicted_return_score(value: float) -> float:
     return clamp((float(value) + 0.05) / 0.10 * 30.0, 0.0, 30.0)
 
 
+def score_0_100(value: Any) -> float:
+    try:
+        numeric = float(value)
+    except Exception:
+        return 0.0
+    if numeric != numeric:
+        return 0.0
+    return clamp(numeric, 0.0, 100.0)
+
+
+def signal_policy_weights(registry: Dict[str, Any], ml_signals: Dict[str, Any]) -> Dict[str, Any]:
+    signal_policy = registry.get("signal_policy") if isinstance(registry.get("signal_policy"), dict) else {}
+    if signal_policy:
+        return {
+            "rule_weight": float(signal_policy.get("rule_weight", 0.75)),
+            "ml_weight": float(signal_policy.get("ml_weight", 0.25)),
+            "reason": signal_policy.get("reason", "registry signal_policy"),
+            "model_source": ml_signals.get("model_source") or signal_policy.get("model_source"),
+            "calibrated": bool(ml_signals.get("calibrated", False)),
+        }
+
+    model_source = str(ml_signals.get("model_source") or ("active" if registry.get("active_model") else "fallback"))
+    calibrated = bool(ml_signals.get("calibrated", False))
+    if model_source == "fallback" or not calibrated:
+        return {
+            "rule_weight": 0.75,
+            "ml_weight": 0.25,
+            "reason": "fallback or uncalibrated ML model",
+            "model_source": model_source,
+            "calibrated": calibrated,
+        }
+    return {
+        "rule_weight": 0.60,
+        "ml_weight": 0.40,
+        "reason": "active calibrated ML model",
+        "model_source": model_source,
+        "calibrated": calibrated,
+    }
+
+
 def backtest_ranked_rows(
     labeled,
     score_column: str,
@@ -181,6 +221,33 @@ def backtest_ranked_rows(
         "precision_at_k": finite_float(outperform.mean()) if outperform is not None and outperform.notna().any() else finite_float((top_target > 0).mean()),
         "top_k_avg_drawdown": finite_float(drawdown.mean()) if drawdown is not None and drawdown.notna().any() else None,
         "turnover_proxy": turnover_proxy(selected_by_date),
+    }
+
+
+def stability_score(rows, score_column: str, target_column: str, top_k: int, cost_return: float) -> Dict[str, Any]:
+    if rows is None or rows.empty or "walk_forward_fold" not in rows.columns:
+        return {"stability_score": None, "fold_excess_net_returns": [], "stability_warning": "fold data unavailable"}
+
+    fold_excess: List[float] = []
+    for _, fold_rows in rows.groupby("walk_forward_fold"):
+        metrics = backtest_ranked_rows(fold_rows, score_column, target_column, top_k, cost_return)
+        if metrics.get("excess_net_return") is not None:
+            fold_excess.append(float(metrics["excess_net_return"]))
+    if not fold_excess:
+        return {"stability_score": None, "fold_excess_net_returns": [], "stability_warning": "fold excess unavailable"}
+
+    import pandas as pd
+
+    values = pd.Series(fold_excess, dtype=float)
+    mean = float(values.mean())
+    std = float(values.std(ddof=0))
+    warning = "validation sample is small" if len(rows) < 100 or rows["snapshot_date"].nunique() < 30 else None
+    return {
+        "stability_score": finite_float(mean / (std + 1e-9)),
+        "fold_excess_net_returns": [finite_float(value) for value in fold_excess],
+        "fold_excess_net_return_mean": finite_float(mean),
+        "fold_excess_net_return_std": finite_float(std),
+        "stability_warning": warning,
     }
 
 
@@ -230,6 +297,7 @@ def fit_ml_walk_forward_predictions(labeled, args: argparse.Namespace):
         prob = classifier.predict_proba(X.loc[val_idx])[:, 1]
         pred_return = return_model.predict(X.loc[val_idx])
         validation = labeled.loc[val_idx].copy()
+        validation["walk_forward_fold"] = fold_no
         validation["outperform_prob_5d"] = prob
         validation["predicted_return_5d"] = pred_return
         validation["ml_signal_score"] = [
@@ -273,7 +341,7 @@ def run_rule_backtest(df, args: argparse.Namespace, cost_return: float) -> Dict[
     return backtest_ranked_rows(labeled, actual_score_column or args.score_column, args.target_column, args.top_k, cost_return)
 
 
-def run_ml_walk_forward(df, args: argparse.Namespace, cost_return: float) -> Dict[str, Any]:
+def run_ml_walk_forward(df, args: argparse.Namespace, cost_return: float, registry: Dict[str, Any], ml_signals: Dict[str, Any]) -> Dict[str, Any]:
     dependency = ml_dependency_check()
     if not dependency.get("ok"):
         return {
@@ -300,35 +368,80 @@ def run_ml_walk_forward(df, args: argparse.Namespace, cost_return: float) -> Dic
     if validation_rows is None:
         return {"status": "no_op", **meta}
 
-    metrics = backtest_ranked_rows(validation_rows, "ml_signal_score", args.target_column, args.top_k, cost_return)
+    weights = signal_policy_weights(registry, ml_signals)
+    validation_rows["rule_score"] = validation_rows["final_score"].apply(score_0_100) if "final_score" in validation_rows.columns else 0.0
+    validation_rows["ml_score"] = validation_rows["ml_signal_score"].apply(score_0_100)
+    validation_rows["ensemble_score"] = (
+        validation_rows["rule_score"] * weights["rule_weight"]
+        + validation_rows["ml_score"] * weights["ml_weight"]
+    )
+
+    metrics = backtest_ranked_rows(validation_rows, "ml_score", args.target_column, args.top_k, cost_return)
+    metrics.update(stability_score(validation_rows, "ml_score", args.target_column, args.top_k, cost_return))
     metrics.update({
         "status": "completed",
-        "score_column": "ml_signal_score",
+        "score_column": "ml_score",
         "outperform_prob_backtest": backtest_ranked_rows(validation_rows, "outperform_prob_5d", args.target_column, args.top_k, cost_return),
         "predicted_return_backtest": backtest_ranked_rows(validation_rows, "predicted_return_5d", args.target_column, args.top_k, cost_return),
         "walk_forward_meta": meta,
+        "policy_weights": weights,
     })
-    if "final_score" in validation_rows.columns:
-        metrics["rule_final_score_on_ml_validation_window"] = backtest_ranked_rows(
-            validation_rows,
-            "final_score",
-            args.target_column,
-            args.top_k,
-            cost_return,
-        )
+    metrics["same_window_rule_metrics"] = backtest_ranked_rows(
+        validation_rows,
+        "rule_score",
+        args.target_column,
+        args.top_k,
+        cost_return,
+    )
+    metrics["same_window_rule_metrics"].update(stability_score(validation_rows, "rule_score", args.target_column, args.top_k, cost_return))
+    metrics["same_window_ensemble_metrics"] = backtest_ranked_rows(
+        validation_rows,
+        "ensemble_score",
+        args.target_column,
+        args.top_k,
+        cost_return,
+    )
+    metrics["same_window_ensemble_metrics"].update(stability_score(validation_rows, "ensemble_score", args.target_column, args.top_k, cost_return))
     return metrics
 
 
 def compare_rule_and_ml(rule_metrics: Dict[str, Any], ml_metrics: Dict[str, Any]) -> Dict[str, Any]:
-    if rule_metrics.get("status") == "no_op" or ml_metrics.get("status") != "completed":
+    if ml_metrics.get("status") != "completed":
         return {}
+    same_rule = ml_metrics.get("same_window_rule_metrics") or {}
+    ensemble = ml_metrics.get("same_window_ensemble_metrics") or {}
     return {
-        "top_k_mean_net_return_diff_ml_minus_rule": finite_float((ml_metrics.get("top_k_mean_net_return") or 0.0) - (rule_metrics.get("top_k_mean_net_return") or 0.0)),
-        "excess_net_return_diff_ml_minus_rule": finite_float((ml_metrics.get("excess_net_return") or 0.0) - (rule_metrics.get("excess_net_return") or 0.0)),
-        "precision_at_k_diff_ml_minus_rule": finite_float((ml_metrics.get("precision_at_k") or 0.0) - (rule_metrics.get("precision_at_k") or 0.0)),
-        "selected_rows_rule": rule_metrics.get("selected_rows"),
+        "comparison_window": "ml_walk_forward_validation_dates",
+        "top_k_mean_net_return_diff_ml_minus_rule": finite_float((ml_metrics.get("top_k_mean_net_return") or 0.0) - (same_rule.get("top_k_mean_net_return") or 0.0)),
+        "excess_net_return_diff_ml_minus_rule": finite_float((ml_metrics.get("excess_net_return") or 0.0) - (same_rule.get("excess_net_return") or 0.0)),
+        "precision_at_k_diff_ml_minus_rule": finite_float((ml_metrics.get("precision_at_k") or 0.0) - (same_rule.get("precision_at_k") or 0.0)),
+        "excess_net_return_diff_ensemble_minus_rule": finite_float((ensemble.get("excess_net_return") or 0.0) - (same_rule.get("excess_net_return") or 0.0)),
+        "excess_net_return_diff_ensemble_minus_ml": finite_float((ensemble.get("excess_net_return") or 0.0) - (ml_metrics.get("excess_net_return") or 0.0)),
+        "selected_rows_rule": same_rule.get("selected_rows"),
         "selected_rows_ml": ml_metrics.get("selected_rows"),
+        "selected_rows_ensemble": ensemble.get("selected_rows"),
     }
+
+
+def judgment_lines(ml_metrics: Dict[str, Any]) -> List[str]:
+    if ml_metrics.get("status") != "completed":
+        return ["ML walk-forward comparison is unavailable; keep rule-first scoring."]
+    lines: List[str] = []
+    same_rule = ml_metrics.get("same_window_rule_metrics") or {}
+    ensemble = ml_metrics.get("same_window_ensemble_metrics") or {}
+    if (ml_metrics.get("selected_rows") or 0) < 100:
+        lines.append("ML validation sample is small; do not use ML as primary trading signal.")
+    if (ml_metrics.get("excess_net_return") or 0.0) <= (same_rule.get("excess_net_return") or 0.0):
+        lines.append("ML does not dominate rule baseline on excess net return.")
+    ensemble_best = (
+        (ensemble.get("excess_net_return") or -999.0) > (same_rule.get("excess_net_return") or -999.0)
+        and (ensemble.get("excess_net_return") or -999.0) > (ml_metrics.get("excess_net_return") or -999.0)
+    )
+    if ensemble_best:
+        lines.append("Ensemble candidate is eligible for further paper-trading evaluation.")
+    else:
+        lines.append("Keep rule-first scoring and use ML as secondary modifier.")
+    return lines
 
 
 def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
@@ -338,16 +451,16 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
         return no_op(f"{dataset_path} 파일이 없거나 비어 있습니다.", extra={"dataset_path": str(dataset_path)})
 
     cost_bps, cost_return = round_trip_cost(args)
+    registry = load_json(MODEL_REGISTRY_PATH, {})
+    ml_signals = load_json(ML_SIGNALS_JSON_PATH, {})
     rule_metrics = run_rule_backtest(df, args, cost_return)
-    ml_metrics = run_ml_walk_forward(df, args, cost_return) if args.ml_walk_forward else {}
+    ml_metrics = run_ml_walk_forward(df, args, cost_return, registry, ml_signals) if args.ml_walk_forward else {}
 
     if rule_metrics.get("status") == "no_op" and not args.ml_walk_forward:
         result = no_op(rule_metrics.get("reason", "백테스트 가능 row가 부족합니다."), labeled_rows=rule_metrics.get("labeled_rows", 0))
         result["dataset_path"] = str(dataset_path)
         return result
 
-    registry = load_json(MODEL_REGISTRY_PATH, {})
-    ml_signals = load_json(ML_SIGNALS_JSON_PATH, {})
     return {
         "generated_at": utc_now(),
         "mode": "signal_backtest",
@@ -363,6 +476,7 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
         "ml_walk_forward_enabled": bool(args.ml_walk_forward),
         "ml_walk_forward_metrics": ml_metrics,
         "comparison": compare_rule_and_ml(rule_metrics, ml_metrics),
+        "judgment": judgment_lines(ml_metrics) if args.ml_walk_forward else [],
         "order_enabled": False,
     }
 
@@ -387,7 +501,7 @@ def build_report(result: Dict[str, Any]) -> str:
         lines.append(f"- labeled_rows: {result.get('labeled_rows', 0)}")
         return "\n".join(lines)
 
-    lines.append("## Rule / Requested Score Backtest")
+    lines.append("## Full-period rule backtest")
     metrics = result.get("metrics", {})
     if metrics.get("status") == "no_op":
         lines.append(f"- no_op: {metrics.get('reason')}")
@@ -397,7 +511,7 @@ def build_report(result: Dict[str, Any]) -> str:
 
     if result.get("ml_walk_forward_enabled"):
         lines.append("")
-        lines.append("## ML Walk-Forward Backtest")
+        lines.append("## Same-window comparison: rule vs ML vs ensemble")
         ml_metrics = result.get("ml_walk_forward_metrics", {})
         if ml_metrics.get("status") != "completed":
             lines.append(f"- status: {ml_metrics.get('status')}")
@@ -406,27 +520,41 @@ def build_report(result: Dict[str, Any]) -> str:
                 lines.append(f"- missing_dependencies: {ml_metrics.get('missing_dependencies')}")
                 lines.append(f"- install_command: {ml_metrics.get('install_command')}")
         else:
-            for key in [
-                "score_column",
-                "date_count",
-                "labeled_rows",
-                "selected_rows",
-                "top_k_mean_return",
-                "top_k_mean_net_return",
-                "all_mean_net_return",
-                "excess_net_return",
-                "top_k_hit_rate",
-                "precision_at_k",
-                "top_k_avg_drawdown",
-                "turnover_proxy",
+            same_rule = ml_metrics.get("same_window_rule_metrics") or {}
+            ensemble = ml_metrics.get("same_window_ensemble_metrics") or {}
+            lines.append(f"- policy_weights: {ml_metrics.get('policy_weights')}")
+            lines.append("| signal | selected_rows | date_count | top_k_net | all_net | excess_net | precision_at_k | hit_rate | drawdown | turnover | stability |")
+            lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+            for label, item in [
+                ("rule_score", same_rule),
+                ("ml_score", ml_metrics),
+                ("ensemble_score", ensemble),
             ]:
-                lines.append(f"- {key}: {ml_metrics.get(key)}")
+                lines.append(
+                    f"| {label} | {item.get('selected_rows')} | {item.get('date_count')} | "
+                    f"{item.get('top_k_mean_net_return')} | {item.get('all_mean_net_return')} | "
+                    f"{item.get('excess_net_return')} | {item.get('precision_at_k')} | "
+                    f"{item.get('top_k_hit_rate')} | {item.get('top_k_avg_drawdown')} | "
+                    f"{item.get('turnover_proxy')} | {item.get('stability_score')} |"
+                )
+            warnings = [
+                item.get("stability_warning")
+                for item in [same_rule, ml_metrics, ensemble]
+                if item.get("stability_warning")
+            ]
+            if warnings:
+                lines.append(f"- stability/sample warnings: {sorted(set(warnings))}")
 
         if result.get("comparison"):
             lines.append("")
             lines.append("## Rule vs ML")
             for key, value in result.get("comparison", {}).items():
                 lines.append(f"- {key}: {value}")
+        if result.get("judgment"):
+            lines.append("")
+            lines.append("## 판단")
+            for item in result.get("judgment", []):
+                lines.append(f"- {item}")
 
     lines.extend([
         "",

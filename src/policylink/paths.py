@@ -82,6 +82,8 @@ MODEL_PROMOTION_REPORT_PATH = REPORTS_DIR / "model_promotion_report.md"
 MODEL_RESEARCH_PIPELINE_REPORT_PATH = REPORTS_DIR / "model_research_pipeline_report.md"
 ML_DEPENDENCY_CHECK_JSON_PATH = REPORTS_DIR / "ml_dependency_check.json"
 ML_DEPENDENCY_CHECK_MD_PATH = REPORTS_DIR / "ml_dependency_check.md"
+SIGNAL_POLICY_JSON_PATH = REPORTS_DIR / "signal_policy.json"
+SIGNAL_POLICY_REPORT_PATH = REPORTS_DIR / "signal_policy_report.md"
 
 XGB_OUTPERFORM_MODEL_PATH = MODELS_DIR / "xgb_outperform_5d.json"
 XGB_RETURN_MODEL_PATH = MODELS_DIR / "xgb_return_5d.json"

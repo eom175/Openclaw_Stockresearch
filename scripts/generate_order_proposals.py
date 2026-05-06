@@ -34,6 +34,14 @@ from policylink.utils import load_json, normalize_code, parse_number
 KST = timezone(timedelta(hours=9))
 ML_SIGNALS_PATH = REPORTS_DIR / "ml_signals.json"
 
+DEFAULT_SIGNAL_POLICY = {
+    "primary_signal": "rule",
+    "recommended_policy": "rule_first_ml_modifier",
+    "rule_weight": 0.75,
+    "ml_weight": 0.25,
+    "auto_order_allowed": False,
+}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -142,7 +150,8 @@ def yahoo_sector_risk_off(sector: str, yahoo_features: Dict[str, Any]) -> bool:
 def load_inputs(allow_ml_signals: bool) -> Dict[str, Any]:
     ml_signals = load_json(ML_SIGNALS_PATH, {"signals": {}})
     if not isinstance(ml_signals, dict) or ml_signals.get("model_status") != "available":
-        ml_signals = {"signals": {}}
+        ml_signals = {"signals": {}, "signal_policy": DEFAULT_SIGNAL_POLICY, "warning": ["no_available_ml_model"]}
+    signal_policy = ml_signals.get("signal_policy") if isinstance(ml_signals.get("signal_policy"), dict) else DEFAULT_SIGNAL_POLICY
 
     return {
         "portfolio": load_json(PORTFOLIO_RECOMMENDATION_JSON_PATH, {}),
@@ -154,6 +163,7 @@ def load_inputs(allow_ml_signals: bool) -> Dict[str, Any]:
         "yahoo_features": load_json(YAHOO_GLOBAL_FEATURES_PATH, {"sector_global_scores": {}, "features": {}}),
         "model_rows": load_model_dataset_latest(),
         "ml_signals": ml_signals,
+        "signal_policy": signal_policy,
     }
 
 
@@ -197,11 +207,10 @@ def should_exclude_buy(
     if yahoo_sector_risk_off(sector, yahoo_features):
         reasons.append("Yahoo global risk_off")
 
-    ml_source = str(ml_signal.get("model_source") or "")
-    if ml_signal and ml_source == "active" and parse_number(ml_signal.get("predicted_drawdown_5d"), 0.0) < -0.04:
+    if ml_signal and parse_number(ml_signal.get("predicted_drawdown_5d"), 0.0) < -0.04:
         reasons.append("ML predicted_drawdown_5d risk")
 
-    if ml_signal and ml_source == "active" and str(ml_signal.get("signal_label") or "") == "avoid_or_sell_candidate":
+    if ml_signal and str(ml_signal.get("signal_label") or "") == "avoid_or_sell_candidate":
         reasons.append("ML signal_label=avoid_or_sell_candidate")
 
     return reasons
@@ -287,6 +296,7 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
     news_features = inputs["news_features"]
     yahoo_features = inputs["yahoo_features"]
     ml_signals = (inputs["ml_signals"].get("signals") or {}) if isinstance(inputs["ml_signals"], dict) else {}
+    signal_policy = inputs.get("signal_policy") or DEFAULT_SIGNAL_POLICY
     holdings = holdings_by_code(account_summary)
     risk_level = str((portfolio.get("research") or {}).get("risk_level") or "low")
 
@@ -330,6 +340,7 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
             reasons = [
                 f"섹터 최종점수 {section.get('final_score')} 기준 후보",
                 f"가격점수 {scores['price_score']} / 수급점수 {scores['flow_score']}",
+                f"Signal policy: {signal_policy.get('recommended_policy', 'rule_first_ml_modifier')}",
             ]
             exclude_reasons = should_exclude_buy(
                 code, sector, price_feature, flow_feature, dart_feature, news_feature, yahoo_features, ml_signal, args
@@ -357,10 +368,9 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
                 proposal_type = "new_buy"
 
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= 0.60:
-                if ml_signal.get("model_source") == "active":
-                    reasons.append("active ML outperform_prob_5d 우호")
-                else:
-                    warnings.append("fallback ML outperform_prob_5d 우호이나 보수적으로 해석")
+                reasons.append("ML outperform_prob_5d >= 0.60 보조 긍정 근거")
+                if ml_signal.get("model_source") != "active" or not ml_signal.get("calibrated"):
+                    warnings.append("ML 긍정 신호는 단독 매수 근거가 아니며 rule-first modifier로만 사용")
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= parse_number(ml_signal.get("threshold_used") or inputs["ml_signals"].get("best_threshold"), 0.60):
                 if ml_signal.get("model_source") == "active" and ml_signal.get("calibrated"):
                     reasons.append("calibrated active ML threshold 이상")
@@ -371,10 +381,7 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
             if ml_signal and parse_number(ml_signal.get("predicted_return_5d"), 0.0) > 0:
                 reasons.append("ML predicted_return_5d 양수")
             if ml_signal and str(ml_signal.get("signal_label") or "") == "strong_buy_candidate":
-                if ml_signal.get("model_source") == "active":
-                    reasons.append("active ML strong_buy_candidate")
-                else:
-                    warnings.append("fallback ML strong_buy_candidate")
+                warnings.append("ML strong_buy_candidate도 단독 매수 근거로 사용하지 않습니다.")
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 1.0) < 0.40:
                 warnings.append("ML outperform_prob_5d 약세")
             if ml_signal and str(ml_signal.get("signal_label") or "") == "avoid_or_sell_candidate":
@@ -535,6 +542,7 @@ def build_payload(proposals: List[Dict[str, Any]], risk_result: Optional[Dict[st
         "order_enabled": False,
         "execution_status": "not_executed",
         "source": "portfolio_recommendation",
+        "signal_policy": DEFAULT_SIGNAL_POLICY,
         "proposals": proposals,
         "risk_guard_summary": (risk_result or {}).get("summary", {}),
         "risk_guard_report": str(ORDER_PROPOSALS_MD_PATH.parent / "order_risk_check.md"),
@@ -573,6 +581,7 @@ def build_markdown_report(payload: Dict[str, Any]) -> str:
     buys = [item for item in proposals if item.get("side") == "buy"]
     sells = [item for item in proposals if item.get("side") == "sell"]
     watches = [item for item in proposals if item.get("side") == "watch"]
+    signal_policy = payload.get("signal_policy") or DEFAULT_SIGNAL_POLICY
 
     lines = [
         "# 주문 후보 리포트",
@@ -582,6 +591,15 @@ def build_markdown_report(payload: Dict[str, Any]) -> str:
         "- order_enabled=false",
         "- proposal_only=true",
         "- execution_status=not_executed",
+        f"- Signal policy: {signal_policy.get('recommended_policy', 'rule_first_ml_modifier')}",
+        f"- Rule weight: {signal_policy.get('rule_weight', 0.75)}",
+        f"- ML weight: {signal_policy.get('ml_weight', 0.25)}",
+        "",
+        "## Signal Policy",
+        f"- primary_signal: {signal_policy.get('primary_signal', 'rule')}",
+        f"- recommended_policy: {signal_policy.get('recommended_policy', 'rule_first_ml_modifier')}",
+        "- ML probability is not calibrated이면 ML은 보조 modifier로만 사용합니다.",
+        "- Signal policy: rule-first, ML modifier",
         "",
         "## 오늘의 매수 후보",
     ]
@@ -672,12 +690,14 @@ def main() -> int:
     proposals = buy_proposals + sell_proposals
 
     pre_risk_payload = build_payload(proposals)
+    pre_risk_payload["signal_policy"] = inputs.get("signal_policy") or DEFAULT_SIGNAL_POLICY
     save_proposals(pre_risk_payload)
 
     risk_result = run_risk_guard(pre_risk_payload)
     apply_risk_results(proposals, risk_result)
 
     final_payload = build_payload(proposals, risk_result=risk_result)
+    final_payload["signal_policy"] = inputs.get("signal_policy") or DEFAULT_SIGNAL_POLICY
     save_proposals(final_payload)
     append_proposals_to_ledger(proposals)
 
