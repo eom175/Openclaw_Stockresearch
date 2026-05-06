@@ -37,8 +37,8 @@ cd /Users/eomjiyong/policy-research
 12. `train_model.py --min-labeled-rows 100 --min-dates 10 --n-splits 3`
 13. `predict_signals.py`
 14. `backtest_signals.py`
-15. `generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000`
-16. `log_paper_trades.py --max-candidates 5 --only-approved-for-review`
+15. `generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000 --paper-candidate-mode balanced --max-paper-candidates 10`
+16. `log_paper_trades.py --max-candidates 10 --tracking-mode paper_candidates --include-watch --include-soft-rejected`
 17. `evaluate_paper_trades.py --horizon-days 5`
 
 주문 실행 스크립트는 전체 파이프라인에 포함하지 않는다. 주문 후보 생성과 paper trading 단계도 `proposal_only=true`, `paper_only`, `order_enabled=false`이며 키움 주문 API를 호출하지 않는다. DART/뉴스/Yahoo 수집 실패, ML 학습 no-op, ML 예측 no_model, paper trade 라벨 부족은 warning으로 기록하고 파이프라인은 계속 진행한다.
@@ -392,10 +392,12 @@ Calibration은 historical labeled data를 시간순으로 train/calibration/test
 Paper trading은 실제 주문 없이 후보를 추적하는 단계다.
 
 ```bash
-/Users/eomjiyong/policy-research/.venv/bin/python scripts/generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000
-/Users/eomjiyong/policy-research/.venv/bin/python scripts/log_paper_trades.py --max-candidates 5 --only-approved-for-review
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000 --paper-candidate-mode balanced --max-paper-candidates 10 --include-watch-for-paper --include-rejected-for-paper --paper-min-final-score 55 --paper-min-ml-prob 0.50 --paper-min-signal-score 45
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/log_paper_trades.py --max-candidates 10 --tracking-mode paper_candidates --include-watch --include-soft-rejected
 /Users/eomjiyong/policy-research/.venv/bin/python scripts/evaluate_paper_trades.py --horizon-days 5 --fee-bps 15 --slippage-bps 10
 ```
+
+`execution_candidate`는 리스크 가드 통과 여부를 보는 실제 검토 후보지만 여전히 주문은 실행하지 않는다. `paper_candidate`는 실제 주문 후보가 아니라 모델과 룰 신호가 시간이 지나 맞았는지 보기 위한 성과 추적용 후보다. `high_volatility`, `downtrend`, 뉴스/Yahoo risk, 미체결/주문대기, 비중 초과 같은 soft reject는 paper tracking에 포함할 수 있지만, 종목코드/가격/금액 누락, malformed proposal, non-mock mode 같은 hard reject는 추적에서도 제외한다.
 
 생성 파일:
 
@@ -424,7 +426,7 @@ Paper trading은 실제 주문 없이 후보를 추적하는 단계다.
 
 ```bash
 cd /Users/eomjiyong/policy-research
-/Users/eomjiyong/policy-research/.venv/bin/python scripts/generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000 --min-final-score 70 --min-price-score 55 --min-flow-score 55
+/Users/eomjiyong/policy-research/.venv/bin/python scripts/generate_order_proposals.py --max-buy-candidates 3 --max-sell-candidates 3 --max-order-amount 1000000 --min-final-score 70 --min-price-score 55 --min-flow-score 55 --paper-candidate-mode balanced --max-paper-candidates 10 --include-watch-for-paper --include-rejected-for-paper --paper-min-final-score 55 --paper-min-ml-prob 0.50 --paper-min-signal-score 45
 ```
 
 VS Code에서는 `Orders - Generate Proposals` launch 메뉴를 사용한다.

@@ -148,8 +148,8 @@ def main() -> int:
         PipelineStep("ML - Train Models", [python, str(script_dir / "train_model.py"), "--min-labeled-rows", "100", "--min-dates", "10", "--n-splits", "3"], warning_markers=["training_status=no_op", "model_status=no_op_insufficient_data", "model_status=blocked_by_audit"]),
         PipelineStep("ML - Predict Signals", [python, str(script_dir / "predict_signals.py")], warning_markers=["model_status=no_model", "model_status=insufficient_features"]),
         PipelineStep("ML - Backtest Signals", [python, str(script_dir / "backtest_signals.py")], warning_markers=["backtest_status=no_op"]),
-        PipelineStep("Orders - Generate Proposals", [python, str(script_dir / "generate_order_proposals.py"), "--max-buy-candidates", "3", "--max-sell-candidates", "3", "--max-order-amount", "1000000"]),
-        PipelineStep("Paper - Log Trades", [python, str(script_dir / "log_paper_trades.py"), "--max-candidates", "5", "--only-approved-for-review"], warning_markers=["new_records=0"]),
+        PipelineStep("Orders - Generate Proposals", [python, str(script_dir / "generate_order_proposals.py"), "--max-buy-candidates", "3", "--max-sell-candidates", "3", "--max-order-amount", "1000000", "--paper-candidate-mode", "balanced", "--max-paper-candidates", "10", "--include-watch-for-paper", "--include-rejected-for-paper", "--paper-min-final-score", "55", "--paper-min-ml-prob", "0.50", "--paper-min-signal-score", "45"]),
+        PipelineStep("Paper - Log Trades", [python, str(script_dir / "log_paper_trades.py"), "--max-candidates", "10", "--tracking-mode", "paper_candidates", "--include-watch", "--include-soft-rejected"], warning_markers=["new_records=0"]),
         PipelineStep("Paper - Evaluate Trades", [python, str(script_dir / "evaluate_paper_trades.py"), "--horizon-days", "5"], warning_markers=["evaluation_status=no_op_insufficient_labeled_paper_trades"]),
     ]
 

@@ -134,6 +134,87 @@ def max_daily_new_buy_amount(risk_level: str) -> int:
     return 3_000_000
 
 
+def hard_reject_reasons(proposal: Dict[str, Any], mock_mode: bool, status: str, risk_reasons: List[str]) -> List[str]:
+    reasons: List[str] = []
+    code = normalize_code(proposal.get("stock_code"))
+    side = str(proposal.get("side") or "")
+    estimated_price = parse_number(proposal.get("estimated_price"), 0.0)
+    estimated_amount = parse_number(proposal.get("estimated_amount"), 0.0)
+
+    if not isinstance(proposal, dict) or not proposal.get("proposal_id"):
+        reasons.append("malformed proposal")
+    if not code:
+        reasons.append("missing stock_code")
+    if side not in {"buy", "sell", "watch"}:
+        reasons.append("invalid side")
+    if estimated_price <= 0:
+        reasons.append("missing current price")
+    if side in {"buy", "sell"} and estimated_amount <= 0:
+        reasons.append("invalid amount")
+    if not mock_mode:
+        reasons.append("non-mock mode")
+    if proposal.get("order_enabled") is not False or proposal.get("proposal_only") is not True:
+        reasons.append("security issue: proposal_only/order_enabled=false required")
+
+    hard_markers = [
+        "side 값",
+        "proposal_only/order_enabled=false",
+        "mock mode",
+        "예상 주문금액이 0 이하",
+        "가격 피처가 없어",
+    ]
+    for reason in risk_reasons:
+        if any(marker in str(reason) for marker in hard_markers):
+            reasons.append(str(reason))
+
+    return list(dict.fromkeys(reasons))
+
+
+def paper_tracking_decision(
+    proposal: Dict[str, Any],
+    mock_mode: bool,
+    status: str,
+    risk_reasons: List[str],
+    risk_warnings: List[str],
+) -> Tuple[str, List[str], List[str]]:
+    hard = hard_reject_reasons(proposal, mock_mode, status, risk_reasons)
+    if proposal.get("tracking_status") == "excluded":
+        hard.append("proposal tracking_status=excluded")
+
+    if hard:
+        return "do_not_track", [], hard
+
+    reasons = list(proposal.get("paper_tracking_reason") or [])
+    if status in {"approved_for_review", "reduced_size"}:
+        reasons.append("execution_candidate passed risk guard review")
+    elif status == "watch_only":
+        reasons.append("watch_only candidate is useful for signal tracking")
+    elif status == "rejected":
+        reasons.append("soft rejected candidate kept for paper tracking only")
+
+    soft_markers = [
+        "high_volatility",
+        "downtrend",
+        "risk_off",
+        "현금",
+        "미체결",
+        "주문대기",
+        "섹터 비중",
+        "종목 비중",
+        "뉴스",
+        "flow_score",
+        "순매도",
+        "disclosure_risk",
+        "변동성",
+    ]
+    for reason in risk_reasons + risk_warnings:
+        text = str(reason)
+        if any(marker in text for marker in soft_markers):
+            reasons.append(text)
+
+    return "track", list(dict.fromkeys(reasons)), []
+
+
 def is_mock_mode(account_summary: Dict[str, Any], portfolio: Dict[str, Any], proposals_payload: Dict[str, Any]) -> bool:
     mode_text = " ".join([
         str(account_summary.get("env") or ""),
@@ -379,10 +460,22 @@ def check_proposals(proposals_payload: Dict[str, Any], context: Optional[Dict[st
             "stock_name": proposal.get("stock_name"),
             "side": side,
             "proposal_status": status,
+            "execution_status": status,
             "risk_reasons": risk_reasons,
             "risk_warnings": risk_warnings,
             "max_allowed_amount": max_allowed_amount,
             "recommended_amount_after_guard": recommended_after_guard,
+            "tracking_status": proposal.get("tracking_status", "execution_candidate"),
+            "paper_tracking_status": paper_tracking_decision(
+                proposal, mock_mode, status, risk_reasons, risk_warnings
+            )[0],
+            "paper_tracking_reason": paper_tracking_decision(
+                proposal, mock_mode, status, risk_reasons, risk_warnings
+            )[1],
+            "hard_reject_reason": paper_tracking_decision(
+                proposal, mock_mode, status, risk_reasons, risk_warnings
+            )[2],
+            "can_execute": False,
             "order_enabled": False,
         })
 
@@ -392,6 +485,8 @@ def check_proposals(proposals_payload: Dict[str, Any], context: Optional[Dict[st
         "rejected": sum(1 for item in checked if item["proposal_status"] == "rejected"),
         "reduced_size": sum(1 for item in checked if item["proposal_status"] == "reduced_size"),
         "watch_only": sum(1 for item in checked if item["proposal_status"] == "watch_only"),
+        "paper_trackable": sum(1 for item in checked if item.get("paper_tracking_status") == "track"),
+        "paper_do_not_track": sum(1 for item in checked if item.get("paper_tracking_status") == "do_not_track"),
     }
 
     return {
@@ -426,6 +521,8 @@ def build_markdown_report(result: Dict[str, Any]) -> str:
         f"- 축소 필요: {summary.get('reduced_size', 0)}",
         f"- reject: {summary.get('rejected', 0)}",
         f"- 관망: {summary.get('watch_only', 0)}",
+        f"- paper tracking 가능: {summary.get('paper_trackable', 0)}",
+        f"- paper tracking 제외: {summary.get('paper_do_not_track', 0)}",
         "",
         "## 후보별 검사",
     ]
@@ -434,12 +531,17 @@ def build_markdown_report(result: Dict[str, Any]) -> str:
         lines.append(
             f"- {item.get('proposal_id')} / {item.get('stock_name')}({item.get('stock_code')}) "
             f"/ {item.get('side')} / status={item.get('proposal_status')} "
+            f"/ paper_tracking={item.get('paper_tracking_status')} "
             f"/ after_guard={item.get('recommended_amount_after_guard'):,}원"
         )
         if item.get("risk_reasons"):
             lines.append(f"  - reject reasons: {', '.join(item.get('risk_reasons', []))}")
         if item.get("risk_warnings"):
             lines.append(f"  - warnings: {', '.join(item.get('risk_warnings', []))}")
+        if item.get("paper_tracking_reason"):
+            lines.append(f"  - paper tracking reason: {', '.join(item.get('paper_tracking_reason', [])[:6])}")
+        if item.get("hard_reject_reason"):
+            lines.append(f"  - hard reject: {', '.join(item.get('hard_reject_reason', []))}")
 
     lines.extend([
         "",

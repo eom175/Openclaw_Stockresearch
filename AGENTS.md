@@ -62,6 +62,9 @@
 - `calibrated=false`인 확률은 투자 판단에 과신하지 않는다.
 - paper trading은 실제 주문이 아니다.
 - paper trading script는 주문 API를 호출하지 않는다.
+- `paper_candidate`는 주문 실행 대상이 아니라 성과 추적용 후보일 뿐이다.
+- soft rejected candidate는 paper tracking에만 포함할 수 있다.
+- hard rejected candidate는 paper tracking에서도 제외한다.
 - paper trading 결과가 충분하지 않으면 주문 실행 단계로 넘어가지 않는다.
 - `calibration_missing`이면 ML 확률을 과신하지 않는다.
 - 모든 paper trading output도 `order_enabled=false`를 유지한다.

@@ -62,6 +62,19 @@ def normalize_feature_map(raw: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     }
 
 
+def code_lookup(mapping: Dict[str, Any], code: str, default: Any = None) -> Any:
+    normalized = normalize_code(code)
+    aliases = [
+        normalized,
+        normalized.zfill(6) if normalized else normalized,
+        normalized.lstrip("0") if normalized else normalized,
+    ]
+    for alias in aliases:
+        if alias in mapping:
+            return mapping[alias]
+    return default
+
+
 def load_model_dataset_latest(path: Path = MODEL_DATASET_CSV_PATH) -> Dict[str, Dict[str, Any]]:
     if not path.exists():
         return {}
@@ -238,7 +251,56 @@ def make_scores(
         "ml_outperform_prob_5d": ml_signal.get("outperform_prob_5d") if ml_signal else None,
         "ml_predicted_return_5d": ml_signal.get("predicted_return_5d") if ml_signal else None,
         "ml_predicted_drawdown_5d": ml_signal.get("predicted_drawdown_5d") if ml_signal else None,
+        "ml_signal_score": ml_signal.get("signal_score") if ml_signal else None,
     }
+
+
+def paper_buy_reasons(
+    section: Dict[str, Any],
+    scores: Dict[str, Any],
+    ml_signal: Dict[str, Any],
+    args: argparse.Namespace,
+) -> List[str]:
+    reasons: List[str] = []
+    final_score = parse_number(section.get("final_score"), parse_number(scores.get("final_score"), 0.0))
+    price_score = parse_number(scores.get("price_score"), 0.0)
+    flow_score = parse_number(scores.get("flow_score"), 0.0)
+    ml_prob = parse_number(ml_signal.get("outperform_prob_5d"), -1.0) if ml_signal else -1.0
+    signal_score = parse_number(ml_signal.get("signal_score"), -1.0) if ml_signal else -1.0
+
+    if final_score >= args.paper_min_final_score:
+        reasons.append(f"final_score >= {args.paper_min_final_score}")
+    if ml_signal and ml_signal.get("calibrated") and ml_prob >= args.paper_min_ml_prob:
+        reasons.append(f"calibrated outperform_prob_5d >= {args.paper_min_ml_prob}")
+    if signal_score >= args.paper_min_signal_score:
+        reasons.append(f"signal_score >= {args.paper_min_signal_score}")
+    if price_score >= 55 and flow_score >= 50:
+        reasons.append("price_score >= 55 and flow_score >= 50")
+
+    return reasons
+
+
+def paper_watch_reasons(
+    holding_exists: bool,
+    scores: Dict[str, Any],
+    ml_signal: Dict[str, Any],
+) -> List[str]:
+    reasons: List[str] = []
+    price_score = parse_number(scores.get("price_score"), 50.0)
+    flow_score = parse_number(scores.get("flow_score"), 50.0)
+    drawdown = parse_number(ml_signal.get("predicted_drawdown_5d"), 0.0) if ml_signal else 0.0
+    signal_label = str(ml_signal.get("signal_label") or "") if ml_signal else ""
+
+    if holding_exists and price_score < 45:
+        reasons.append("보유 종목 price_score < 45")
+    if flow_score < 45:
+        reasons.append("flow_score < 45")
+    if signal_label == "avoid_or_sell_candidate":
+        reasons.append("signal_label=avoid_or_sell_candidate")
+    if drawdown < -0.04:
+        reasons.append("predicted_drawdown_5d < -0.04")
+
+    return reasons
 
 
 def build_proposal(
@@ -254,6 +316,9 @@ def build_proposal(
     scores: Dict[str, Any],
     reasons: List[str],
     warnings: List[str],
+    tracking_status: str = "execution_candidate",
+    paper_tracking_reason: Optional[List[str]] = None,
+    risk_guard_blocking_reason: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     if side == "buy":
         order_method = "current_price_plus_buffer_limit"
@@ -282,8 +347,14 @@ def build_proposal(
         "reasons": reasons,
         "warnings": warnings,
         "risk_check_status": "pending",
-        "execution_status": "not_executed",
-        "telegram_approval_required": True,
+        "tracking_status": tracking_status,
+        "paper_tracking_reason": paper_tracking_reason or [],
+        "risk_guard_blocking_reason": risk_guard_blocking_reason or [],
+        "paper_tracking_status": "pending",
+        "hard_reject_reason": [],
+        "can_execute": False,
+        "execution_status": "paper_only" if tracking_status == "paper_candidate" else "not_executed",
+        "telegram_approval_required": tracking_status == "execution_candidate",
     }
 
 
@@ -303,21 +374,21 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
     proposals: List[Dict[str, Any]] = []
     seen_codes = set()
     seq = start_seq
+    execution_count = 0
+    paper_count = 0
 
     for section in portfolio.get("combined_sectors", []) or []:
-        if len([item for item in proposals if item["side"] == "buy"]) >= args.max_buy_candidates:
+        if execution_count >= args.max_buy_candidates and paper_count >= args.max_paper_candidates:
             break
 
-        if parse_number(section.get("final_score"), 0.0) < args.min_final_score:
-            continue
-        if parse_number(section.get("price_score"), 0.0) < args.min_price_score:
-            continue
-        if parse_number(section.get("flow_score"), 0.0) < args.min_flow_score:
-            continue
-
         sector = str(section.get("sector") or "unknown")
+        execution_section_ok = (
+            parse_number(section.get("final_score"), 0.0) >= args.min_final_score
+            and parse_number(section.get("price_score"), 0.0) >= args.min_price_score
+            and parse_number(section.get("flow_score"), 0.0) >= args.min_flow_score
+        )
         for asset in section.get("candidate_assets", []) or []:
-            if len([item for item in proposals if item["side"] == "buy"]) >= args.max_buy_candidates:
+            if execution_count >= args.max_buy_candidates and paper_count >= args.max_paper_candidates:
                 break
             if not isinstance(asset, dict):
                 continue
@@ -331,10 +402,13 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
             flow_feature = flow_features.get(code, {})
             dart_feature = dart_features.get(code, {})
             news_feature = news_features.get(code, {})
-            ml_signal = ml_signals.get(code, {}) if isinstance(ml_signals, dict) else {}
+            ml_signal = code_lookup(ml_signals, code, {}) if isinstance(ml_signals, dict) else {}
             estimated_price = current_price_for(code, price_features)
             qty = calc_recommended_qty("buy", estimated_price, args.max_order_amount, risk_level=risk_level)
             scores = make_scores(code, sector, section, price_feature, flow_feature, dart_feature, news_feature, yahoo_features, ml_signal)
+            buy_paper_reasons = paper_buy_reasons(section, scores, ml_signal, args)
+            watch_paper_reasons = paper_watch_reasons(code in holdings, scores, ml_signal)
+            wants_paper_candidate = bool(buy_paper_reasons or watch_paper_reasons)
 
             warnings = []
             reasons = [
@@ -351,21 +425,53 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
             if parse_number(account_summary.get("pending_or_reserved_amount"), 0.0) > 0:
                 warnings.append("미체결/주문대기 금액이 있어 risk_guard에서 reject될 수 있습니다.")
 
+            execution_candidate = (
+                execution_section_ok
+                and not exclude_reasons
+                and estimated_price > 0
+                and qty > 0
+                and execution_count < args.max_buy_candidates
+            )
+            paper_allowed_by_mode = args.paper_candidate_mode in {"balanced", "broad"}
+            if args.paper_candidate_mode == "strict" and not exclude_reasons and not watch_paper_reasons:
+                paper_allowed_by_mode = True
+            if exclude_reasons and not (args.include_rejected_for_paper or args.paper_candidate_mode == "broad"):
+                paper_allowed_by_mode = False
+            if watch_paper_reasons and not (args.include_watch_for_paper or args.paper_candidate_mode == "broad"):
+                paper_allowed_by_mode = False
+            paper_candidate = (
+                not execution_candidate
+                and wants_paper_candidate
+                and paper_allowed_by_mode
+                and paper_count < args.max_paper_candidates
+                and estimated_price > 0
+            )
+
+            if not execution_candidate and not paper_candidate:
+                continue
+
+            tracking_status = "execution_candidate" if execution_candidate else "paper_candidate"
+            paper_tracking_reason = []
+            if paper_candidate:
+                paper_tracking_reason = buy_paper_reasons + watch_paper_reasons
+                reasons.append("paper tracking 전용 후보")
+                reasons.extend([f"paper: {reason}" for reason in paper_tracking_reason[:4]])
+
             if estimated_price <= 0 or qty <= 0:
                 side = "watch"
                 proposal_type = "watch_only"
                 qty = 0
                 warnings.append("현재가 또는 주문한도 기준으로 1주 후보 산출이 불가능해 관망 후보로 둡니다.")
-            elif exclude_reasons:
+            elif paper_candidate and watch_paper_reasons and not buy_paper_reasons:
                 side = "watch"
                 proposal_type = "watch_only"
                 qty = 0
             elif code in holdings:
                 side = "buy"
-                proposal_type = "add_buy"
+                proposal_type = "add_buy" if execution_candidate else "paper_add_buy"
             else:
                 side = "buy"
-                proposal_type = "new_buy"
+                proposal_type = "new_buy" if execution_candidate else "paper_new_buy"
 
             if ml_signal and parse_number(ml_signal.get("outperform_prob_5d"), 0.0) >= 0.60:
                 reasons.append("ML outperform_prob_5d >= 0.60 보조 긍정 근거")
@@ -402,9 +508,16 @@ def generate_buy_proposals(inputs: Dict[str, Any], args: argparse.Namespace, sta
                 scores=scores,
                 reasons=reasons,
                 warnings=warnings,
+                tracking_status=tracking_status,
+                paper_tracking_reason=paper_tracking_reason,
+                risk_guard_blocking_reason=exclude_reasons,
             )
             proposals.append(proposal)
             seq += 1
+            if tracking_status == "execution_candidate":
+                execution_count += 1
+            else:
+                paper_count += 1
 
     return proposals
 
@@ -472,7 +585,7 @@ def generate_sell_proposals(inputs: Dict[str, Any], args: argparse.Namespace, st
         flow_feature = flow_features.get(code, {})
         dart_feature = dart_features.get(code, {})
         news_feature = news_features.get(code, {})
-        ml_signal = ml_signals.get(code, {}) if isinstance(ml_signals, dict) else {}
+        ml_signal = code_lookup(ml_signals, code, {}) if isinstance(ml_signals, dict) else {}
         reasons = sell_reasons_for(code, holding, holding_rec, price_feature, flow_feature, dart_feature, news_feature, ml_signal)
         if not reasons:
             continue
@@ -509,6 +622,7 @@ def generate_sell_proposals(inputs: Dict[str, Any], args: argparse.Namespace, st
             scores=scores,
             reasons=reasons,
             warnings=["매도 후보도 proposal_only이며 자동 주문으로 넘어가지 않습니다."],
+            tracking_status="execution_candidate",
         ))
         seq += 1
 
@@ -527,11 +641,17 @@ def apply_risk_results(proposals: List[Dict[str, Any]], risk_result: Dict[str, A
         if not checked:
             continue
         proposal["risk_check_status"] = checked.get("proposal_status", "pending")
+        proposal["execution_status_from_guard"] = checked.get("execution_status", proposal["risk_check_status"])
+        proposal["paper_tracking_status"] = checked.get("paper_tracking_status", "do_not_track")
+        proposal["paper_tracking_reason"] = checked.get("paper_tracking_reason", proposal.get("paper_tracking_reason", []))
+        proposal["hard_reject_reason"] = checked.get("hard_reject_reason", [])
         proposal["risk_reasons"] = checked.get("risk_reasons", [])
         proposal["risk_warnings"] = checked.get("risk_warnings", [])
+        proposal["risk_guard_blocking_reason"] = checked.get("risk_reasons", proposal.get("risk_guard_blocking_reason", []))
         proposal["recommended_amount_after_guard"] = checked.get("recommended_amount_after_guard", 0)
         proposal["order_enabled"] = False
-        proposal["execution_status"] = "not_executed"
+        proposal["can_execute"] = False
+        proposal["execution_status"] = "paper_only" if proposal.get("tracking_status") == "paper_candidate" else "not_executed"
 
 
 def build_payload(proposals: List[Dict[str, Any]], risk_result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -567,11 +687,13 @@ def append_proposals_to_ledger(proposals: List[Dict[str, Any]]) -> None:
             "side": proposal.get("side"),
             "proposal_type": proposal.get("proposal_type"),
             "risk_check_status": proposal.get("risk_check_status"),
+            "tracking_status": proposal.get("tracking_status"),
+            "paper_tracking_status": proposal.get("paper_tracking_status"),
             "estimated_amount": proposal.get("estimated_amount"),
             "recommended_amount_after_guard": proposal.get("recommended_amount_after_guard"),
             "order_enabled": False,
             "proposal_only": True,
-            "execution_status": "not_executed",
+            "execution_status": proposal.get("execution_status", "not_executed"),
         })
 
 
@@ -582,6 +704,8 @@ def build_markdown_report(payload: Dict[str, Any]) -> str:
     sells = [item for item in proposals if item.get("side") == "sell"]
     watches = [item for item in proposals if item.get("side") == "watch"]
     signal_policy = payload.get("signal_policy") or DEFAULT_SIGNAL_POLICY
+    execution_candidates = [item for item in proposals if item.get("tracking_status") == "execution_candidate"]
+    paper_candidates = [item for item in proposals if item.get("tracking_status") == "paper_candidate"]
 
     lines = [
         "# 주문 후보 리포트",
@@ -594,6 +718,8 @@ def build_markdown_report(payload: Dict[str, Any]) -> str:
         f"- Signal policy: {signal_policy.get('recommended_policy', 'rule_first_ml_modifier')}",
         f"- Rule weight: {signal_policy.get('rule_weight', 0.75)}",
         f"- ML weight: {signal_policy.get('ml_weight', 0.25)}",
+        f"- execution_candidate: {len(execution_candidates)}",
+        f"- paper_candidate: {len(paper_candidates)}",
         "",
         "## Signal Policy",
         f"- primary_signal: {signal_policy.get('primary_signal', 'rule')}",
@@ -644,6 +770,27 @@ def build_markdown_report(payload: Dict[str, Any]) -> str:
 
     lines.extend([
         "",
+        "## Paper Tracking Candidates",
+        "- 아래 후보는 실제 주문 후보가 아니라 성과 추적용 표본입니다.",
+        "- soft reject 후보도 paper tracking에는 포함될 수 있지만, hard reject 후보는 제외합니다.",
+        "- 모든 paper_candidate는 order_enabled=false이며 execution_status=paper_only입니다.",
+    ])
+    if paper_candidates:
+        for item in paper_candidates:
+            lines.append(
+                f"- {item.get('proposal_id')} / {item.get('stock_name')}({item.get('stock_code')}) "
+                f"/ side={item.get('side')} / risk={item.get('risk_check_status')} "
+                f"/ paper_tracking={item.get('paper_tracking_status')}"
+            )
+            if item.get("paper_tracking_reason"):
+                lines.append(f"  - tracking reason: {', '.join(item.get('paper_tracking_reason', [])[:5])}")
+            if item.get("risk_reasons"):
+                lines.append(f"  - risk_guard_blocking_reason: {', '.join(item.get('risk_reasons', [])[:5])}")
+    else:
+        lines.append("- paper tracking 후보 없음")
+
+    lines.extend([
+        "",
         "## 리스크 가드 결과 요약",
         f"- 전체 후보: {risk_summary.get('total_proposals', 0)}",
         f"- 검토 가능: {risk_summary.get('approved_for_review', 0)}",
@@ -673,6 +820,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-final-score", type=float, default=70.0)
     parser.add_argument("--min-price-score", type=float, default=55.0)
     parser.add_argument("--min-flow-score", type=float, default=55.0)
+    parser.add_argument("--paper-candidate-mode", choices=["strict", "balanced", "broad"], default="balanced")
+    parser.add_argument("--max-paper-candidates", type=int, default=10)
+    parser.add_argument("--include-watch-for-paper", action="store_true")
+    parser.add_argument("--include-rejected-for-paper", action="store_true")
+    parser.add_argument("--paper-min-final-score", type=float, default=55.0)
+    parser.add_argument("--paper-min-ml-prob", type=float, default=0.50)
+    parser.add_argument("--paper-min-signal-score", type=float, default=45.0)
     return parser.parse_args()
 
 

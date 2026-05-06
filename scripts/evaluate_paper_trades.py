@@ -105,17 +105,33 @@ def metrics_for(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     raw_returns = [parse_number(row.get("paper_return_5d"), 0.0) for row in labeled]
     net_returns = [parse_number(row.get("net_return_5d"), 0.0) for row in labeled]
     drawdowns = [parse_number(row.get("max_drawdown_5d"), 0.0) for row in labeled if row.get("max_drawdown_5d") is not None]
+    execution_candidates = [row for row in rows if row.get("tracking_status") == "execution_candidate"]
+    paper_candidates = [row for row in rows if row.get("tracking_status") == "paper_candidate"]
+    soft_rejected = [
+        row for row in rows
+        if row.get("risk_guard_status") == "rejected" and row.get("paper_tracking_status") == "track"
+    ]
     return {
         "total_trades": len(rows),
+        "total_paper_trades": len(rows),
+        "execution_candidate_count": len(execution_candidates),
+        "paper_candidate_count": len(paper_candidates),
+        "watch_only_count": len([row for row in rows if row.get("side") == "watch" or row.get("risk_check_status") == "watch_only"]),
+        "soft_rejected_tracked_count": len(soft_rejected),
         "labeled_trades": len(labeled),
+        "labeled_count": len(labeled),
         "pending_trades": len([row for row in rows if row.get("label_status") != "labeled"]),
+        "pending_count": len([row for row in rows if row.get("label_status") != "labeled"]),
         "buy_candidate_count": len([row for row in rows if row.get("side") == "buy"]),
         "sell_candidate_count": len([row for row in rows if row.get("side") == "sell"]),
         "watch_candidate_count": len([row for row in rows if row.get("side") == "watch"]),
         "mean_return_5d": mean(raw_returns),
         "mean_net_return_5d": mean(net_returns),
+        "mean_net_return_5d_all": mean(net_returns),
         "hit_rate_5d": mean([1.0 if value > 0 else 0.0 for value in net_returns]),
+        "hit_rate_5d_all": mean([1.0 if value > 0 else 0.0 for value in net_returns]),
         "avg_max_drawdown_5d": mean(drawdowns),
+        "avg_drawdown_5d_all": mean(drawdowns),
     }
 
 
@@ -132,8 +148,12 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     metrics = metrics_for(updated)
     approved = [row for row in updated if row.get("risk_check_status") == "approved_for_review"]
     rejected = [row for row in updated if row.get("risk_check_status") == "rejected"]
+    execution_candidates = [row for row in updated if row.get("tracking_status") == "execution_candidate"]
+    paper_candidates = [row for row in updated if row.get("tracking_status") == "paper_candidate"]
     approved_metrics = metrics_for(approved)
     rejected_metrics = metrics_for(rejected)
+    execution_metrics = metrics_for(execution_candidates)
+    paper_metrics = metrics_for(paper_candidates)
     status = "completed" if metrics["labeled_trades"] > 0 else "no_op_insufficient_labeled_paper_trades"
     return {
         "generated_at": utc_now(),
@@ -147,6 +167,10 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             **metrics,
             "approved_for_review_mean_return": approved_metrics.get("mean_net_return_5d"),
             "rejected_mean_return": rejected_metrics.get("mean_net_return_5d"),
+            "mean_net_return_5d_execution_candidates": execution_metrics.get("mean_net_return_5d"),
+            "mean_net_return_5d_paper_candidates": paper_metrics.get("mean_net_return_5d"),
+            "hit_rate_5d_execution_candidates": execution_metrics.get("hit_rate_5d"),
+            "hit_rate_5d_paper_candidates": paper_metrics.get("hit_rate_5d"),
             "rule_first_ml_modifier": metrics.get("mean_net_return_5d"),
         },
         "order_enabled": False,
@@ -176,6 +200,9 @@ def build_report(result: Dict[str, Any]) -> str:
             "",
             "## No-op",
             "- 아직 평가 가능한 labeled paper trade가 부족합니다.",
+            f"- pending_count: {metrics.get('pending_count')}",
+            f"- total_paper_trades: {metrics.get('total_paper_trades')}",
+            f"- paper_candidate_count: {metrics.get('paper_candidate_count')}",
         ])
     lines.extend([
         "",

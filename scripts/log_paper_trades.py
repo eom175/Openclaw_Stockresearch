@@ -77,6 +77,7 @@ def existing_keys(rows: List[Dict[str, Any]]) -> set:
             normalize_code(row.get("stock_code")),
             str(row.get("side")),
             str(row.get("proposal_type")),
+            str(row.get("tracking_status")),
         )
         for row in rows
     }
@@ -86,14 +87,31 @@ def make_id(snapshot_date: str, sequence: int) -> str:
     return f"{snapshot_date}-PT-{sequence:03d}"
 
 
-def should_keep(proposal: Dict[str, Any], args: argparse.Namespace, risk_status: str) -> bool:
+def should_keep(proposal: Dict[str, Any], args: argparse.Namespace, risk_item: Dict[str, Any]) -> bool:
     side = str(proposal.get("side") or "")
+    risk_status = str(risk_item.get("proposal_status") or proposal.get("risk_check_status") or "")
+    tracking_status = str(proposal.get("tracking_status") or risk_item.get("tracking_status") or "")
+    paper_tracking_status = str(risk_item.get("paper_tracking_status") or proposal.get("paper_tracking_status") or "")
+
     if args.side != "both" and side != args.side:
         return False
-    if side == "watch" and not args.allow_watch:
+    if side == "watch" and not (args.allow_watch or args.include_watch):
         return False
-    if args.only_approved_for_review and risk_status != "approved_for_review":
+    if risk_status == "rejected" and not args.include_soft_rejected:
         return False
+
+    if args.only_approved_for_review:
+        return risk_status == "approved_for_review"
+
+    if args.tracking_mode == "approved_only":
+        return risk_status == "approved_for_review"
+    if paper_tracking_status != "track":
+        return False
+    if args.tracking_mode == "paper_candidates":
+        return tracking_status in {"execution_candidate", "paper_candidate"}
+    if args.tracking_mode == "all_trackable":
+        return True
+
     return True
 
 
@@ -129,7 +147,12 @@ def build_record(
         "outperform_prob_5d": scores.get("ml_outperform_prob_5d"),
         "predicted_return_5d": scores.get("ml_predicted_return_5d"),
         "predicted_drawdown_5d": scores.get("ml_predicted_drawdown_5d"),
+        "tracking_status": proposal.get("tracking_status") or risk_item.get("tracking_status"),
+        "paper_tracking_reason": risk_item.get("paper_tracking_reason") or proposal.get("paper_tracking_reason") or [],
         "risk_check_status": risk_item.get("proposal_status") or proposal.get("risk_check_status"),
+        "risk_guard_status": risk_item.get("proposal_status") or proposal.get("risk_check_status"),
+        "paper_tracking_status": risk_item.get("paper_tracking_status") or proposal.get("paper_tracking_status"),
+        "can_execute": False,
         "order_enabled": False,
         "execution_status": "paper_only",
         "label_status": "pending",
@@ -159,8 +182,7 @@ def log_paper_trades(args: argparse.Namespace) -> Dict[str, Any]:
         if len(new_records) >= args.max_candidates:
             break
         risk_item = risk_map.get(str(proposal.get("proposal_id")), {})
-        risk_status = str(risk_item.get("proposal_status") or proposal.get("risk_check_status") or "")
-        if not should_keep(proposal, args, risk_status):
+        if not should_keep(proposal, args, risk_item):
             skipped += 1
             continue
         key = (
@@ -168,6 +190,7 @@ def log_paper_trades(args: argparse.Namespace) -> Dict[str, Any]:
             normalize_code(proposal.get("stock_code")),
             str(proposal.get("side")),
             str(proposal.get("proposal_type")),
+            str(proposal.get("tracking_status")),
         )
         if key in keys:
             duplicates += 1
@@ -186,8 +209,10 @@ def log_paper_trades(args: argparse.Namespace) -> Dict[str, Any]:
         "duplicate_skipped": duplicates,
         "filter_skipped": skipped,
         "total_records": len(all_rows),
+        "tracking_mode": args.tracking_mode,
         "only_approved_for_review": bool(args.only_approved_for_review),
-        "allow_watch": bool(args.allow_watch),
+        "include_watch": bool(args.include_watch or args.allow_watch),
+        "include_soft_rejected": bool(args.include_soft_rejected),
         "order_enabled": False,
         "execution_status": "paper_only",
     }
@@ -206,6 +231,9 @@ def build_report(result: Dict[str, Any]) -> str:
         f"- duplicate_skipped: {result.get('duplicate_skipped')}",
         f"- filter_skipped: {result.get('filter_skipped')}",
         f"- total_records: {result.get('total_records')}",
+        f"- tracking_mode: {result.get('tracking_mode')}",
+        f"- include_watch: {result.get('include_watch')}",
+        f"- include_soft_rejected: {result.get('include_soft_rejected')}",
         "",
         "Paper trading은 실제 주문이 아니라 후보 추적용 로그입니다.",
     ]
@@ -214,8 +242,11 @@ def build_report(result: Dict[str, Any]) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Log proposal-only order candidates into paper trade tracking.")
-    parser.add_argument("--max-candidates", type=int, default=5)
+    parser.add_argument("--max-candidates", type=int, default=10)
     parser.add_argument("--side", choices=["both", "buy", "sell"], default="both")
+    parser.add_argument("--tracking-mode", choices=["approved_only", "paper_candidates", "all_trackable"], default="paper_candidates")
+    parser.add_argument("--include-watch", action="store_true")
+    parser.add_argument("--include-soft-rejected", action="store_true")
     parser.add_argument("--only-approved-for-review", action="store_true")
     parser.add_argument("--allow-watch", action="store_true")
     return parser.parse_args()

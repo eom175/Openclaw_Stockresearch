@@ -339,7 +339,14 @@
       "--max-order-amount", "1000000",
       "--min-final-score", "70",
       "--min-price-score", "55",
-      "--min-flow-score", "55"
+      "--min-flow-score", "55",
+      "--paper-candidate-mode", "balanced",
+      "--max-paper-candidates", "10",
+      "--include-watch-for-paper",
+      "--include-rejected-for-paper",
+      "--paper-min-final-score", "55",
+      "--paper-min-ml-prob", "0.50",
+      "--paper-min-signal-score", "45"
     ]
   },
   {
@@ -482,8 +489,10 @@
     "cwd": "${workspaceFolder}",
     "python": "${workspaceFolder}/.venv/bin/python",
     "args": [
-      "--max-candidates", "5",
-      "--only-approved-for-review"
+      "--max-candidates", "10",
+      "--tracking-mode", "paper_candidates",
+      "--include-watch",
+      "--include-soft-rejected"
     ]
   },
   {
